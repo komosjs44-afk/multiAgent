@@ -3,6 +3,9 @@ from pathlib import Path
 
 
 SAMPLE_PROFILE_PATH = Path(__file__).parent / "sample_profile.json"
+OUTPUT_PATH = Path(__file__).parent / "output.md"
+USER_GUIDE_PATH = Path(__file__).parent / "output_user_guide.md"
+REVIEW_REPORT_PATH = Path(__file__).parent / "review_report.md"
 
 
 CAREER_REQUIRED_SKILLS = {
@@ -202,6 +205,114 @@ def write_markdown(profile, strengths, gap_result, activities, roadmap):
     return "\n".join(lines).rstrip()
 
 
+def write_output_markdown(profile, strengths, gap_result):
+    lines = [
+        "# 핵심 분석 결과",
+        "",
+        "## 기본 정보",
+        f"- 이름: {profile.get('name', '미입력')}",
+        f"- 학과: {profile.get('major', '미입력')}",
+        f"- 학년: {profile.get('grade', '미입력')}",
+        f"- 목표 진로: {profile.get('target_career', '미입력')}",
+        "",
+        "## 현재 강점",
+    ]
+
+    lines.extend(f"- {strength}" for strength in strengths)
+    lines.extend(["", "## 부족 역량"])
+
+    gaps = gap_result["gaps"]
+    if gaps:
+        lines.extend(f"- {gap}" for gap in gaps)
+    else:
+        lines.append("- 입력된 정보 기준으로 주요 필요 역량의 기초 증거가 확인됩니다.")
+
+    lines.extend(["", "## 보유 근거"])
+    covered = gap_result["covered"]
+    if covered:
+        for item in covered:
+            lines.append(f"- {item['skill']}: {item['evidence']}")
+    else:
+        lines.append("- 아직 명확한 보유 근거가 부족합니다.")
+
+    return "\n".join(lines).rstrip()
+
+
+def write_user_guide_markdown(profile, activities, roadmap):
+    lines = [
+        "# 사용자 실행 가이드",
+        "",
+        f"대상: {profile.get('name', '사용자')}",
+        f"목표 진로: {profile.get('target_career', '미입력')}",
+        "",
+        "## 추천 활동",
+    ]
+
+    lines.extend(f"{index}. {activity}" for index, activity in enumerate(activities, start=1))
+
+    lines.extend(["", "## 4주 실행 로드맵"])
+    for item in roadmap:
+        lines.extend([
+            f"### Week {item['week']}",
+            f"- 집중 역량: {item['focus']}",
+            f"- 실행 과제: {item['action']}",
+            "",
+        ])
+
+    return "\n".join(lines).rstrip()
+
+
+def write_review_report(profile, gap_result, activities, roadmap):
+    checks = [
+        ("입력 파일을 읽었는가", bool(profile)),
+        ("목표 진로가 있는가", bool(profile.get("target_career"))),
+        ("부족 역량을 생성했는가", bool(gap_result["gaps"])),
+        ("추천 활동을 생성했는가", bool(activities)),
+        ("4주 로드맵을 생성했는가", len(roadmap) == 4),
+    ]
+
+    lines = [
+        "# 검토 보고서",
+        "",
+        "## 점검 결과",
+        "| 항목 | 결과 |",
+        "|---|---|",
+    ]
+
+    for label, passed in checks:
+        result = "통과" if passed else "확인 필요"
+        lines.append(f"| {label} | {result} |")
+
+    lines.extend([
+        "",
+        "## 구현 수준",
+        "- 기본형: 규칙 기반 함수 에이전트",
+        "- 외부 API, LLM, Docker, LangGraph, RAG는 사용하지 않음",
+        "",
+        "## 현재 한계",
+        "- 입력 데이터의 표현이 크게 바뀌면 키워드 기반 판단이 부정확할 수 있습니다.",
+        "- 목표 진로별 필요 역량은 현재 코드에 정의된 규칙에 의존합니다.",
+        "- 관심 분야는 참고 정보이며 실제 보유 역량으로 바로 인정하지 않습니다.",
+    ])
+
+    return "\n".join(lines).rstrip()
+
+
+def save_outputs(profile, strengths, gap_result, activities, roadmap):
+    OUTPUT_PATH.write_text(
+        write_output_markdown(profile, strengths, gap_result),
+        encoding="utf-8",
+    )
+    USER_GUIDE_PATH.write_text(
+        write_user_guide_markdown(profile, activities, roadmap),
+        encoding="utf-8",
+    )
+    REVIEW_REPORT_PATH.write_text(
+        write_review_report(profile, gap_result, activities, roadmap),
+        encoding="utf-8",
+    )
+
+
 def main():
     profile = load_profile()
     target_career = profile.get("target_career", "")
@@ -211,6 +322,7 @@ def main():
     activities = recommend_activities(gap_result["gaps"])
     roadmap = make_roadmap(gap_result["gaps"], activities)
     markdown = write_markdown(profile, strengths, gap_result, activities, roadmap)
+    save_outputs(profile, strengths, gap_result, activities, roadmap)
 
     print(markdown)
 
