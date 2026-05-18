@@ -1,0 +1,39 @@
+{
+  "name": "이현",
+  "major": "컴퓨터공학",
+  "grade": 3,
+  "target_career": "공기업 전산직",
+  "courses": [
+    {
+      "name": "데이터베이스",
+      "grade": "A+"
+    },
+    {
+      "name": "알고리즘",
+      "grade": "B0"
+    },
+    {
+      "name": "운영체제",
+      "grade": "B+"
+    }
+  ],
+  "projects": [
+    {
+      "name": "Pay-Mate",
+      "role": "기획 및 개발"
+    }
+  ],
+  "certificates": [
+    "컴퓨터활용능력 1급 필기"
+  ],
+  "activities": [
+    "AI/SW 공모전 참여",
+    "보안 발표 준비",
+    "창업 프로젝트"
+  ],
+  "interests": [
+    "보안",
+    "클라우드",
+    "공기업"
+  ]
+}
