@@ -49,3 +49,32 @@ export type AnalysisHistoryRow = {
   analysis_result: CareerAnalysis;
   created_at: string;
 };
+
+export type EvidenceDocumentType =
+  | "transcript"
+  | "contest"
+  | "certificate"
+  | "portfolio";
+
+export type EvidenceDocument = {
+  id: string;
+  fileName: string;
+  docType: EvidenceDocumentType;
+  file: File;
+};
+
+export type ExtractedEvidence = {
+  documentType: EvidenceDocumentType;
+  fileName: string;
+  extractedAt: string;
+  skills: string[];
+  certificates: string[];
+  projects: string[];
+  grade?: string;
+};
+
+export type EvidenceAnalysisDraft = {
+  skills: string;
+  certificates: string;
+  projects: string;
+};

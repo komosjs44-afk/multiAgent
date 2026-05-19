@@ -4,10 +4,18 @@ import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
 
+import { mergeEvidenceToProfile } from "@/lib/evidenceMapper";
 import { formatCareerReport } from "@/lib/reportFormatter";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { isCareerAnalysis, validateProfile } from "@/lib/validation";
-import type { CareerAnalysis, UserProfile } from "@/types/career";
+import type {
+  CareerAnalysis,
+  EvidenceAnalysisDraft,
+  EvidenceDocument,
+  EvidenceDocumentType,
+  ExtractedEvidence,
+  UserProfile,
+} from "@/types/career";
 
 const initialProfile: UserProfile = {
   major: "",
@@ -63,6 +71,16 @@ export default function Home() {
   const [saveStatus, setSaveStatus] = useState<
     "idle" | "saving" | "saved" | "failed"
   >("idle");
+  const [evidenceFiles, setEvidenceFiles] = useState<EvidenceDocument[]>([]);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractError, setExtractError] = useState("");
+  const [showDraft, setShowDraft] = useState(false);
+  const [draftEdits, setDraftEdits] = useState<EvidenceAnalysisDraft>({
+    skills: "",
+    certificates: "",
+    projects: "",
+  });
+  const [mergeMessage, setMergeMessage] = useState("");
 
   const hasInput = useMemo(() => hasAnyInput(profile), [profile]);
 
@@ -188,6 +206,88 @@ export default function Home() {
     } catch {
       setCopyMessage("복사에 실패했습니다. 브라우저 권한을 확인해주세요.");
     }
+  }
+
+  function handleFileAdd(event: ChangeEvent<HTMLInputElement>) {
+    const { files } = event.target;
+    if (!files) return;
+
+    const newDocs: EvidenceDocument[] = Array.from(files).map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      fileName: file.name,
+      docType: "certificate" as EvidenceDocumentType,
+      file,
+    }));
+
+    setEvidenceFiles((prev) => [...prev, ...newDocs]);
+    event.target.value = "";
+  }
+
+  function handleDocTypeChange(id: string, docType: EvidenceDocumentType) {
+    setEvidenceFiles((prev) =>
+      prev.map((doc) => (doc.id === id ? { ...doc, docType } : doc)),
+    );
+  }
+
+  function handleFileRemove(id: string) {
+    setEvidenceFiles((prev) => prev.filter((doc) => doc.id !== id));
+  }
+
+  async function handleExtract() {
+    if (!evidenceFiles.length) return;
+
+    setIsExtracting(true);
+    setExtractError("");
+
+    try {
+      const results = await Promise.all(
+        evidenceFiles.map(async (doc) => {
+          const formData = new FormData();
+          formData.append("file", doc.file);
+          formData.append("docType", doc.docType);
+          formData.append("fileName", doc.fileName);
+
+          const response = await fetch("/api/evidence/extract", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) throw new Error("extract_failed");
+          return response.json() as Promise<ExtractedEvidence>;
+        }),
+      );
+
+      const allSkills = [...new Set(results.flatMap((r) => r.skills))];
+      const allCerts = [...new Set(results.flatMap((r) => r.certificates))];
+      const allProjects = [...new Set(results.flatMap((r) => r.projects))];
+
+      setDraftEdits({
+        skills: allSkills.join(", "),
+        certificates: allCerts.join(", "),
+        projects: allProjects.join("\n"),
+      });
+      setShowDraft(true);
+    } catch {
+      setExtractError("추출 중 오류가 발생했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsExtracting(false);
+    }
+  }
+
+  function handleDraftChange(
+    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+  ) {
+    const { name, value } = event.target;
+    setDraftEdits((prev) => ({ ...prev, [name]: value }));
+  }
+
+  function handleMergeToProfile() {
+    setProfile((prev) => mergeEvidenceToProfile(prev, draftEdits));
+    setShowDraft(false);
+    setEvidenceFiles([]);
+    setDraftEdits({ skills: "", certificates: "", projects: "" });
+    setMergeMessage("추출된 정보가 프로필에 반영되었습니다.");
+    setTimeout(() => setMergeMessage(""), 3000);
   }
 
   return (
@@ -364,6 +464,168 @@ export default function Home() {
             )}
           </section>
         </div>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-5">
+            <h2 className="text-xl font-semibold text-slate-950">
+              증빙서류 업로드
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              성적표, 자격증 확인서, 공모전 수상 내역, 포트폴리오를 업로드하면
+              프로필 정보를 자동으로 추출합니다.
+            </p>
+          </div>
+
+          <label htmlFor="evidence-upload">
+            <div className="cursor-pointer rounded-md border-2 border-dashed border-slate-300 p-6 text-center transition hover:border-emerald-400 hover:bg-slate-50">
+              <p className="text-sm font-medium text-slate-600">
+                파일을 클릭하여 선택
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                PDF, JPG, PNG 형식 지원
+              </p>
+            </div>
+            <input
+              id="evidence-upload"
+              type="file"
+              multiple
+              accept=".pdf,.jpg,.jpeg,.png"
+              className="sr-only"
+              onChange={handleFileAdd}
+            />
+          </label>
+
+          {evidenceFiles.length > 0 && (
+            <ul className="mt-4 grid gap-2">
+              {evidenceFiles.map((doc) => (
+                <li
+                  key={doc.id}
+                  className="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-slate-50 p-3"
+                >
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
+                    {doc.fileName}
+                  </p>
+                  <select
+                    value={doc.docType}
+                    onChange={(e) =>
+                      handleDocTypeChange(
+                        doc.id,
+                        e.target.value as EvidenceDocumentType,
+                      )
+                    }
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-700 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+                  >
+                    <option value="transcript">성적표</option>
+                    <option value="contest">공모전/해커톤 확인서</option>
+                    <option value="certificate">자격증 확인서</option>
+                    <option value="portfolio">포트폴리오</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => handleFileRemove(doc.id)}
+                    aria-label={`${doc.fileName} 삭제`}
+                    className="text-sm text-slate-400 transition hover:text-red-500"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {extractError && (
+            <p className="mt-3 text-sm font-medium text-red-600">
+              {extractError}
+            </p>
+          )}
+
+          {evidenceFiles.length > 0 && (
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={handleExtract}
+                disabled={isExtracting}
+                className="h-10 rounded-md bg-emerald-700 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {isExtracting ? "추출 중..." : "정보 추출하기"}
+              </button>
+            </div>
+          )}
+        </section>
+
+        {showDraft && (
+          <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-5 shadow-sm sm:p-6">
+            <div className="mb-5">
+              <h2 className="text-xl font-semibold text-slate-950">
+                추출 결과 확인
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                추출된 정보를 확인하고 수정한 뒤 프로필에 반영하세요. 기존
+                입력값은 보강됩니다.
+              </p>
+            </div>
+
+            <div className="grid gap-4">
+              <label className="grid gap-2 text-sm font-medium text-slate-700">
+                기술 키워드 (쉼표로 구분)
+                <input
+                  type="text"
+                  name="skills"
+                  value={draftEdits.skills}
+                  onChange={handleDraftChange}
+                  placeholder="Python, React, SQL"
+                  className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-medium text-slate-700">
+                자격증 (쉼표로 구분)
+                <input
+                  type="text"
+                  name="certificates"
+                  value={draftEdits.certificates}
+                  onChange={handleDraftChange}
+                  placeholder="정보처리기사, SQLD"
+                  className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-medium text-slate-700">
+                프로젝트/공모전 내역
+                <textarea
+                  name="projects"
+                  value={draftEdits.projects}
+                  onChange={handleDraftChange}
+                  placeholder="프로젝트 이름, 역할, 기술 등"
+                  className="min-h-24 resize-none rounded-md border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+                />
+              </label>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowDraft(false)}
+                  className="h-10 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={handleMergeToProfile}
+                  className="h-10 rounded-md bg-emerald-700 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+                >
+                  이 정보로 분석에 반영하기
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {mergeMessage && (
+          <p className="rounded-md bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+            {mergeMessage}
+          </p>
+        )}
       </section>
     </main>
   );
