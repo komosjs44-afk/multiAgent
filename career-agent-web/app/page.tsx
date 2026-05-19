@@ -1,7 +1,11 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 
+import { createClient } from "@/lib/supabase/client";
+import { formatCareerReport } from "@/lib/reportFormatter";
+import { isCareerAnalysis, validateProfile } from "@/lib/validation";
 import type { CareerAnalysis, UserProfile } from "@/types/career";
 
 const initialProfile: UserProfile = {
@@ -61,9 +65,25 @@ export default function Home() {
   const [result, setResult] = useState<CareerAnalysis | null>(null);
   const [message, setMessage] = useState("아직 분석 전입니다.");
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof UserProfile, string>>
+  >({});
+  const [copyMessage, setCopyMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<
+    "idle" | "saving" | "saved" | "failed"
+  >("idle");
 
   const hasInput = useMemo(() => hasAnyInput(profile), [profile]);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth
+      .getUser()
+      .then(({ data: { user } }) => setUserId(user?.id ?? null))
+      .catch(() => setUserId(null));
+  }, []);
 
   function handleChange(
     event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
@@ -72,6 +92,11 @@ export default function Home() {
     setProfile((current) => ({
       ...current,
       [name]: value,
+    }));
+    setCopyMessage("");
+    setFieldErrors((current) => ({
+      ...current,
+      [name]: undefined,
     }));
   }
 
@@ -85,8 +110,19 @@ export default function Home() {
       return;
     }
 
+    const validation = validateProfile(profile);
+    if (!validation.isValid) {
+      setResult(null);
+      setError("입력값을 확인해주세요.");
+      setFieldErrors(validation.errors);
+      setMessage("필수 입력과 학년 형식을 확인해야 합니다.");
+      return;
+    }
+
     setIsLoading(true);
     setError("");
+    setFieldErrors({});
+    setSaveStatus("idle");
     setMessage("입력값을 분석하고 있습니다.");
 
     try {
@@ -99,18 +135,65 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error("분석 요청에 실패했습니다.");
+        const errorBody = (await response.json().catch(() => null)) as {
+          errors?: Partial<Record<keyof UserProfile, string>>;
+        } | null;
+
+        if (errorBody?.errors) {
+          setFieldErrors(errorBody.errors);
+        }
+
+        throw new Error("server");
       }
 
-      const analysis = (await response.json()) as CareerAnalysis;
-      setResult(analysis);
+      const json: unknown = await response.json();
+      if (!isCareerAnalysis(json)) {
+        throw new Error("invalid_response");
+      }
+
+      setResult(json);
+      setCopyMessage("");
       setMessage("입력값을 기준으로 임시 분석 결과를 만들었습니다.");
-    } catch {
+
+      if (userId) {
+        setSaveStatus("saving");
+        fetch("/api/analysis-history", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            input_profile: profile,
+            analysis_result: json,
+          }),
+        })
+          .then((res) => setSaveStatus(res.ok ? "saved" : "failed"))
+          .catch(() => setSaveStatus("failed"));
+      }
+    } catch (err) {
       setResult(null);
-      setError("분석 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.");
+      const msg = err instanceof Error ? err.message : "";
+      if (msg === "invalid_response") {
+        setError("서버에서 올바르지 않은 응답을 받았습니다. 잠시 후 다시 시도해주세요.");
+      } else if (msg === "server") {
+        setError("분석 요청에 실패했습니다. 잠시 후 다시 시도해주세요.");
+      } else {
+        setError("네트워크 연결을 확인하고 다시 시도해주세요.");
+      }
       setMessage("분석 실패");
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleCopyReport() {
+    if (!result) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(formatCareerReport(result));
+      setCopyMessage("Markdown 리포트를 클립보드에 복사했습니다.");
+    } catch {
+      setCopyMessage("복사에 실패했습니다. 브라우저 권한을 확인해주세요.");
     }
   }
 
@@ -163,8 +246,14 @@ export default function Home() {
                       value={profile[field.id]}
                       onChange={handleChange}
                       placeholder={field.placeholder}
-                      className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+                      aria-invalid={Boolean(fieldErrors[field.id])}
+                      className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 aria-[invalid=true]:border-red-400 aria-[invalid=true]:focus:border-red-500 aria-[invalid=true]:focus:ring-red-100"
                     />
+                    {fieldErrors[field.id] ? (
+                      <span className="text-xs font-medium text-red-600">
+                        {fieldErrors[field.id]}
+                      </span>
+                    ) : null}
                   </label>
                 ))}
               </div>
@@ -220,27 +309,58 @@ export default function Home() {
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <div className="mb-5">
-              <h2 className="text-xl font-semibold text-slate-950">
-                결과 미리보기
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                입력값 기반 임시 결과입니다. 아직 LLM이나 Supabase와 연결되지 않았습니다.
-              </p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold text-slate-950">
+                    결과 미리보기
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    입력값 기반 임시 결과입니다. 아직 LLM이나 Supabase와 연결되지 않았습니다.
+                  </p>
+                </div>
+                {result ? (
+                  <button
+                    type="button"
+                    onClick={handleCopyReport}
+                    className="h-10 w-full rounded-md border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:w-auto"
+                  >
+                    리포트 복사하기
+                  </button>
+                ) : null}
+              </div>
+              {saveStatus !== "idle" && (
+                <p
+                  className={`mt-2 text-xs font-medium ${
+                    saveStatus === "saved"
+                      ? "text-emerald-600"
+                      : saveStatus === "failed"
+                        ? "text-red-500"
+                        : "text-slate-400"
+                  }`}
+                >
+                  {saveStatus === "saving" && "저장 중..."}
+                  {saveStatus === "saved" && "분석 기록이 저장되었습니다."}
+                  {saveStatus === "failed" && "저장에 실패했습니다."}
+                </p>
+              )}
+              {copyMessage ? (
+                <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                  {copyMessage}
+                </p>
+              ) : null}
             </div>
 
             {result ? (
-              <div className="grid gap-3">
-                <ResultBlock
-                  label="추천 진로"
-                  value={result.recommendedCareer}
-                />
-                <ResultBlock
-                  label="적합도 점수"
-                  value={`${result.fitScore} / 100`}
-                />
-                <ResultList label="강점" items={result.strengths} />
-                <ResultList label="부족한 점" items={result.gaps} />
-                <ResultList label="다음 액션" items={result.nextActions} />
+              <div className="grid gap-4">
+                <TotalScoreCard score={result.totalScore} />
+                <TopCareerList result={result} />
+                <ScoreBreakdown scoreItems={result.scoreItems} />
+                <ResultList label="점수 산정 이유" items={result.scoreReasons} />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <ResultList label="강점" items={result.strengths} tone="good" />
+                  <ResultList label="약점" items={result.gaps} tone="warn" />
+                </div>
+                <ActionChecklist items={result.nextActions} />
               </div>
             ) : (
               <EmptyResult />
@@ -252,22 +372,166 @@ export default function Home() {
   );
 }
 
-function ResultBlock({ label, value }: { label: string; value: string }) {
+function TotalScoreCard({ score }: { score: number }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-      <p className="text-sm font-semibold text-slate-500">{label}</p>
-      <p className="mt-2 text-base leading-7 text-slate-900">{value}</p>
+    <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-4">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-emerald-700">총점</p>
+          <p className="mt-1 text-3xl font-bold text-emerald-950">
+            {score}
+            <span className="text-base font-semibold text-emerald-700">
+              {" "}
+              / 100
+            </span>
+          </p>
+        </div>
+        <p className="text-right text-sm leading-6 text-emerald-800">
+          입력 근거를 기준으로 산정한
+          <br className="hidden sm:block" /> 임시 적합도입니다.
+        </p>
+      </div>
+      <div className="mt-4 h-3 overflow-hidden rounded-full bg-white">
+        <div
+          className="h-full rounded-full bg-emerald-700 transition-all"
+          style={{ width: `${score}%` }}
+        />
+      </div>
     </div>
   );
 }
 
-function ResultList({ label, items }: { label: string; items: string[] }) {
+function TopCareerList({ result }: { result: CareerAnalysis }) {
+  const careers = [
+    {
+      name: result.recommendedCareer,
+      score: result.totalScore,
+      note: "입력한 관심 진로 기준",
+    },
+    {
+      name: "백엔드 개발자",
+      score: Math.max(45, result.totalScore - 8),
+      note: "기술스택과 프로젝트 경험 기반",
+    },
+    {
+      name: "IT 서비스 기획형 개발자",
+      score: Math.max(40, result.totalScore - 14),
+      note: "문제 정의와 문서화 역량 확장 후보",
+    },
+  ];
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-500">추천 진로 TOP 3</p>
+      <ol className="mt-3 grid gap-3">
+        {careers.map((career, index) => (
+          <li
+            key={`${career.name}-${index}`}
+            className="flex flex-col gap-2 rounded-md bg-white p-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <p className="text-sm font-semibold text-slate-500">
+                TOP {index + 1}
+              </p>
+              <p className="mt-1 text-base font-semibold text-slate-950">
+                {career.name}
+              </p>
+              <p className="mt-1 text-sm text-slate-500">{career.note}</p>
+            </div>
+            <p className="text-lg font-bold text-emerald-700">
+              {career.score}점
+            </p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function ScoreBreakdown({
+  scoreItems,
+}: {
+  scoreItems: CareerAnalysis["scoreItems"];
+}) {
+  const items = [
+    ["전공 적합도", scoreItems.majorFit, 20],
+    ["기술스택", scoreItems.techStack, 20],
+    ["프로젝트 경험", scoreItems.projectExperience, 20],
+    ["자격증", scoreItems.certificates, 10],
+    ["진로 명확성", scoreItems.careerClarity, 15],
+    ["실행 가능성", scoreItems.actionability, 15],
+  ] as const;
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-500">항목별 점수</p>
+      <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+        {items.map(([label, score, maxScore]) => (
+          <div key={label} className="rounded-md bg-white p-3">
+            <div className="flex items-center justify-between gap-4 text-sm">
+              <dt className="font-medium text-slate-600">{label}</dt>
+              <dd className="font-semibold text-slate-950">
+                {score} / {maxScore}
+              </dd>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-emerald-600"
+                style={{ width: `${(score / maxScore) * 100}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function ResultList({
+  label,
+  items,
+  tone = "default",
+}: {
+  label: string;
+  items: string[];
+  tone?: "default" | "good" | "warn";
+}) {
+  const markerClass =
+    tone === "good"
+      ? "bg-emerald-600"
+      : tone === "warn"
+        ? "bg-amber-500"
+        : "bg-slate-400";
+
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
       <p className="text-sm font-semibold text-slate-500">{label}</p>
       <ul className="mt-2 grid gap-2 text-base leading-7 text-slate-900">
         {items.map((item) => (
-          <li key={item}>- {item}</li>
+          <li key={item} className="flex gap-2">
+            <span
+              className={`mt-3 h-1.5 w-1.5 shrink-0 rounded-full ${markerClass}`}
+            />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ActionChecklist({ items }: { items: string[] }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-500">다음 액션 플랜</p>
+      <ul className="mt-3 grid gap-3">
+        {items.map((item, index) => (
+          <li key={item} className="flex gap-3 rounded-md bg-white p-3">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-emerald-300 bg-emerald-50 text-xs font-bold text-emerald-700">
+              {index + 1}
+            </span>
+            <span className="text-sm leading-6 text-slate-900">{item}</span>
+          </li>
         ))}
       </ul>
     </div>

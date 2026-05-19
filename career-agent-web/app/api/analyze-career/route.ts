@@ -1,18 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { analyzeCareer } from "@/lib/careerAgent";
-import type { UserProfile } from "@/types/career";
-
-function isUserProfile(value: unknown): value is UserProfile {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const profile = value as Record<string, unknown>;
-  return ["major", "grade", "career", "skills", "projects", "certificates"].every(
-    (key) => typeof profile[key] === "string",
-  );
-}
+import { isUserProfile, validateProfile } from "@/lib/validation";
 
 export async function POST(request: Request) {
   try {
@@ -21,6 +10,14 @@ export async function POST(request: Request) {
     if (!isUserProfile(body)) {
       return NextResponse.json(
         { error: "Invalid profile payload" },
+        { status: 400 },
+      );
+    }
+
+    const validation = validateProfile(body);
+    if (!validation.isValid) {
+      return NextResponse.json(
+        { error: "Invalid profile input", errors: validation.errors },
         { status: 400 },
       );
     }
