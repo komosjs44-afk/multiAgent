@@ -2,9 +2,10 @@
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import Link from "next/link";
 
-import { createClient } from "@/lib/supabase/client";
 import { formatCareerReport } from "@/lib/reportFormatter";
+import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { isCareerAnalysis, validateProfile } from "@/lib/validation";
 import type { CareerAnalysis, UserProfile } from "@/types/career";
 
@@ -25,12 +26,12 @@ const profileFields: Array<{
   {
     id: "major",
     label: "학과",
-    placeholder: "컴퓨터공학",
+    placeholder: "컴퓨터공학과",
   },
   {
     id: "grade",
     label: "학년",
-    placeholder: "3학년",
+    placeholder: "3",
   },
   {
     id: "career",
@@ -46,18 +47,6 @@ const profileFields: Array<{
 
 function hasAnyInput(profile: UserProfile) {
   return Object.values(profile).some((value) => value.trim().length > 0);
-}
-
-function EmptyResult() {
-  return (
-    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-5">
-      <p className="text-sm font-semibold text-slate-700">입력 대기 중</p>
-      <p className="mt-2 text-sm leading-6 text-slate-500">
-        학과, 관심 진로, 보유 기술, 프로젝트 경험을 입력한 뒤 분석하기를
-        누르면 임시 rule-based 결과가 표시됩니다.
-      </p>
-    </div>
-  );
 }
 
 export default function Home() {
@@ -78,6 +67,10 @@ export default function Home() {
   const hasInput = useMemo(() => hasAnyInput(profile), [profile]);
 
   useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      return;
+    }
+
     const supabase = createClient();
     supabase.auth
       .getUser()
@@ -153,7 +146,7 @@ export default function Home() {
 
       setResult(json);
       setCopyMessage("");
-      setMessage("입력값을 기준으로 임시 분석 결과를 만들었습니다.");
+      setMessage("입력값을 기준으로 rule-based 분석 결과를 만들었습니다.");
 
       if (userId) {
         setSaveStatus("saving");
@@ -174,7 +167,7 @@ export default function Home() {
       if (msg === "invalid_response") {
         setError("서버에서 올바르지 않은 응답을 받았습니다. 잠시 후 다시 시도해주세요.");
       } else if (msg === "server") {
-        setError("분석 요청에 실패했습니다. 잠시 후 다시 시도해주세요.");
+        setError("분석 요청에 실패했습니다. 입력값을 확인하고 다시 시도해주세요.");
       } else {
         setError("네트워크 연결을 확인하고 다시 시도해주세요.");
       }
@@ -210,24 +203,27 @@ export default function Home() {
                 Career Agent
               </h1>
               <p className="mt-4 text-base leading-7 text-slate-600 sm:text-lg">
-                대학생의 진로 목표, 기술스택, 프로젝트 경험을 바탕으로 개발
-                성장 전략을 제안하는 AI Agent
+                대학생의 진로 목표, 기술스택, 프로젝트 경험을 바탕으로 개발 성장 전략을 제안하는 AI Agent
               </p>
             </div>
+            <Link
+              href="/dashboard"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              분석 기록 보기
+            </Link>
           </div>
         </header>
 
         <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <div className="mb-5 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-semibold text-slate-950">
-                  프로필 입력
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  현재는 서버 API Route에서 임시 rule-based 결과를 만듭니다.
-                </p>
-              </div>
+            <div className="mb-5">
+              <h2 className="text-xl font-semibold text-slate-950">
+                프로필 입력
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                입력값은 서버 API Route에서 rule-based 방식으로 분석됩니다.
+              </p>
             </div>
 
             <form className="grid gap-4" onSubmit={handleAnalyze}>
@@ -268,7 +264,7 @@ export default function Home() {
                   name="projects"
                   value={profile.projects}
                   onChange={handleChange}
-                  placeholder="프로젝트 이름, 맡은 역할, 사용 기술을 적어주세요."
+                  placeholder="프로젝트 이름, 맡은 역할, 사용 기술, GitHub/배포 경험을 적어주세요."
                   className="min-h-28 resize-none rounded-md border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
                 />
               </label>
@@ -315,7 +311,7 @@ export default function Home() {
                     결과 미리보기
                   </h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    입력값 기반 임시 결과입니다. 아직 LLM이나 Supabase와 연결되지 않았습니다.
+                    API 응답을 바탕으로 점수, 추천 진로, 로드맵을 표시합니다.
                   </p>
                 </div>
                 {result ? (
@@ -353,14 +349,15 @@ export default function Home() {
             {result ? (
               <div className="grid gap-4">
                 <TotalScoreCard score={result.totalScore} />
-                <TopCareerList result={result} />
+                <TopCareerList careers={result.topCareers} />
                 <ScoreBreakdown scoreItems={result.scoreItems} />
                 <ResultList label="점수 산정 이유" items={result.scoreReasons} />
                 <div className="grid gap-3 sm:grid-cols-2">
                   <ResultList label="강점" items={result.strengths} tone="good" />
-                  <ResultList label="약점" items={result.gaps} tone="warn" />
+                  <ResultList label="부족한 점" items={result.gaps} tone="warn" />
                 </div>
                 <ActionChecklist items={result.nextActions} />
+                <RoadmapList roadmap={result.roadmap} />
               </div>
             ) : (
               <EmptyResult />
@@ -369,6 +366,17 @@ export default function Home() {
         </div>
       </section>
     </main>
+  );
+}
+
+function EmptyResult() {
+  return (
+    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-5">
+      <p className="text-sm font-semibold text-slate-700">입력 대기 중</p>
+      <p className="mt-2 text-sm leading-6 text-slate-500">
+        학과, 관심 진로, 보유 기술, 프로젝트 경험을 입력하고 분석하기를 누르면 rule-based 결과가 표시됩니다.
+      </p>
+    </div>
   );
 }
 
@@ -388,7 +396,7 @@ function TotalScoreCard({ score }: { score: number }) {
         </div>
         <p className="text-right text-sm leading-6 text-emerald-800">
           입력 근거를 기준으로 산정한
-          <br className="hidden sm:block" /> 임시 적합도입니다.
+          <br className="hidden sm:block" /> rule-based 적합도입니다.
         </p>
       </div>
       <div className="mt-4 h-3 overflow-hidden rounded-full bg-white">
@@ -401,46 +409,45 @@ function TotalScoreCard({ score }: { score: number }) {
   );
 }
 
-function TopCareerList({ result }: { result: CareerAnalysis }) {
-  const careers = [
-    {
-      name: result.recommendedCareer,
-      score: result.totalScore,
-      note: "입력한 관심 진로 기준",
-    },
-    {
-      name: "백엔드 개발자",
-      score: Math.max(45, result.totalScore - 8),
-      note: "기술스택과 프로젝트 경험 기반",
-    },
-    {
-      name: "IT 서비스 기획형 개발자",
-      score: Math.max(40, result.totalScore - 14),
-      note: "문제 정의와 문서화 역량 확장 후보",
-    },
-  ];
-
+function TopCareerList({
+  careers,
+}: {
+  careers: CareerAnalysis["topCareers"];
+}) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
       <p className="text-sm font-semibold text-slate-500">추천 진로 TOP 3</p>
       <ol className="mt-3 grid gap-3">
         {careers.map((career, index) => (
-          <li
-            key={`${career.name}-${index}`}
-            className="flex flex-col gap-2 rounded-md bg-white p-3 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div>
-              <p className="text-sm font-semibold text-slate-500">
-                TOP {index + 1}
+          <li key={`${career.name}-${index}`} className="rounded-md bg-white p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-500">
+                  TOP {index + 1}
+                </p>
+                <p className="mt-1 text-base font-semibold text-slate-950">
+                  {career.name}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  {career.reason}
+                </p>
+              </div>
+              <p className="text-lg font-bold text-emerald-700">
+                {career.fitScore}점
               </p>
-              <p className="mt-1 text-base font-semibold text-slate-950">
-                {career.name}
-              </p>
-              <p className="mt-1 text-sm text-slate-500">{career.note}</p>
             </div>
-            <p className="text-lg font-bold text-emerald-700">
-              {career.score}점
-            </p>
+            <div className="mt-3 grid gap-2 text-sm text-slate-600">
+              <p>
+                <span className="font-semibold text-slate-700">부족 역량:</span>{" "}
+                {career.missingSkills.length
+                  ? career.missingSkills.join(", ")
+                  : "큰 공백 없음"}
+              </p>
+              <p>
+                <span className="font-semibold text-slate-700">추천 액션:</span>{" "}
+                {career.recommendedActions[0]}
+              </p>
+            </div>
           </li>
         ))}
       </ol>
@@ -457,9 +464,10 @@ function ScoreBreakdown({
     ["전공 적합도", scoreItems.majorFit, 20],
     ["기술스택", scoreItems.techStack, 20],
     ["프로젝트 경험", scoreItems.projectExperience, 20],
+    ["공모전 경험", scoreItems.contestExperience, 10],
     ["자격증", scoreItems.certificates, 10],
-    ["진로 명확성", scoreItems.careerClarity, 15],
-    ["실행 가능성", scoreItems.actionability, 15],
+    ["진로 명확성", scoreItems.careerClarity, 10],
+    ["실행 가능성", scoreItems.actionability, 10],
   ] as const;
 
   return (
@@ -534,6 +542,32 @@ function ActionChecklist({ items }: { items: string[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function RoadmapList({
+  roadmap,
+}: {
+  roadmap: CareerAnalysis["roadmap"];
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-500">4주 성장 로드맵</p>
+      <div className="mt-3 grid gap-3">
+        {roadmap.map((week) => (
+          <section key={week.week} className="rounded-md bg-white p-3">
+            <h3 className="text-sm font-semibold text-slate-950">
+              {week.week}주차: {week.title}
+            </h3>
+            <ul className="mt-2 grid gap-1 text-sm leading-6 text-slate-600">
+              {week.actions.map((action) => (
+                <li key={action}>- {action}</li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
     </div>
   );
 }

@@ -4,25 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
-import type { AnalysisHistoryRow, CareerAnalysis } from "@/types/career";
+import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
+import { isCareerAnalysis } from "@/lib/validation";
+import type { AnalysisHistoryRow } from "@/types/career";
 
 type LoadState = "loading" | "ready" | "error";
-
-function isCareerAnalysis(value: unknown): value is CareerAnalysis {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const analysis = value as Partial<CareerAnalysis>;
-  return (
-    typeof analysis.recommendedCareer === "string" &&
-    typeof analysis.totalScore === "number" &&
-    Array.isArray(analysis.strengths) &&
-    Array.isArray(analysis.gaps) &&
-    Array.isArray(analysis.nextActions)
-  );
-}
 
 function isHistoryRow(value: unknown): value is AnalysisHistoryRow {
   if (!value || typeof value !== "object") {
@@ -55,18 +41,13 @@ function getTopCareer(rows: AnalysisHistoryRow[]) {
     counts.set(career, (counts.get(career) ?? 0) + 1);
   });
 
-  return (
-    Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ??
-    "기록 없음"
-  );
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "기록 없음";
 }
 
 export default function DashboardPage() {
   const router = useRouter();
   const [rows, setRows] = useState<AnalysisHistoryRow[]>([]);
-  const [selectedRow, setSelectedRow] = useState<AnalysisHistoryRow | null>(
-    null,
-  );
+  const [selectedRow, setSelectedRow] = useState<AnalysisHistoryRow | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -74,6 +55,11 @@ export default function DashboardPage() {
     let ignore = false;
 
     async function loadDashboard() {
+      if (!isSupabaseConfigured()) {
+        router.replace("/login");
+        return;
+      }
+
       const supabase = createClient();
       const {
         data: { user },
@@ -90,7 +76,7 @@ export default function DashboardPage() {
         });
 
         if (!response.ok) {
-          throw new Error("분석 기록을 불러오지 못했습니다.");
+          throw new Error("Failed to fetch history");
         }
 
         const payload = (await response.json()) as { data?: unknown };
@@ -159,7 +145,7 @@ export default function DashboardPage() {
         </header>
 
         <section className="grid gap-4 sm:grid-cols-3">
-          <SummaryCard label="총 분석 횟수" value={`${summary.totalCount}회`} />
+          <SummaryCard label="총 분석 횟수" value={`${summary.totalCount}건`} />
           <SummaryCard
             label="평균 점수"
             value={summary.totalCount ? `${summary.averageScore}점` : "-"}
@@ -185,7 +171,7 @@ export default function DashboardPage() {
               아직 분석 기록이 없습니다.
             </h2>
             <p className="mt-2 text-sm text-slate-500">
-              첫 분석을 실행하면 이곳에서 최근 기록을 확인할 수 있습니다.
+              첫 분석을 실행하면 이 화면에서 최근 기록을 확인할 수 있습니다.
             </p>
             <Link
               href="/"
@@ -280,9 +266,21 @@ function AnalysisModal({
 
         <div className="mt-5 grid gap-4">
           <DetailBlock label="종합 점수" items={[`${analysis.totalScore} / 100`]} />
+          <DetailBlock
+            label="추천 진로 TOP 3"
+            items={analysis.topCareers.map(
+              (career) => `${career.name} (${career.fitScore}점): ${career.reason}`,
+            )}
+          />
           <DetailBlock label="강점" items={analysis.strengths} />
-          <DetailBlock label="약점" items={analysis.gaps} />
+          <DetailBlock label="부족한 점" items={analysis.gaps} />
           <DetailBlock label="다음 액션" items={analysis.nextActions} />
+          <DetailBlock
+            label="4주 로드맵"
+            items={analysis.roadmap.map(
+              (week) => `${week.week}주차 ${week.title}: ${week.actions.join(" / ")}`,
+            )}
+          />
           <DetailBlock label="점수 산정 이유" items={analysis.scoreReasons} />
         </div>
       </div>

@@ -14,10 +14,23 @@ export type CareerAnalysis = {
     majorFit: number;
     techStack: number;
     projectExperience: number;
+    contestExperience: number;
     certificates: number;
     careerClarity: number;
     actionability: number;
   };
+  topCareers: Array<{
+    name: string;
+    fitScore: number;
+    reason: string;
+    missingSkills: string[];
+    recommendedActions: string[];
+  }>;
+  roadmap: Array<{
+    week: number;
+    title: string;
+    actions: string[];
+  }>;
   scoreReasons: string[];
   strengths: string[];
   gaps: string[];

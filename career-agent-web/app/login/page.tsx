@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import { useState } from "react";
 
-import { createClient } from "@/lib/supabase/client";
+import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
 function getErrorMessage(status?: number): string {
   if (status === 429) {
@@ -17,8 +18,21 @@ function getErrorMessage(status?: number): string {
 }
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginShell hasCallbackError={false} />}>
+      <LoginContent />
+    </Suspense>
+  );
+}
+
+function LoginContent() {
   const searchParams = useSearchParams();
   const hasCallbackError = searchParams.get("error") === "auth_callback_failed";
+
+  return <LoginShell hasCallbackError={hasCallbackError} />;
+}
+
+function LoginShell({ hasCallbackError }: { hasCallbackError: boolean }) {
 
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "sent" | "error">(
@@ -32,6 +46,12 @@ export default function LoginPage() {
 
     setStatus("loading");
     setErrorMessage("");
+
+    if (!isSupabaseConfigured()) {
+      setErrorMessage("Supabase 환경변수가 설정되지 않아 로그인 기능을 사용할 수 없습니다.");
+      setStatus("error");
+      return;
+    }
 
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOtp({
@@ -63,7 +83,7 @@ export default function LoginPage() {
             href="/"
             className="text-sm font-semibold text-emerald-700 hover:underline"
           >
-            ← Career Agent
+            Career Agent
           </Link>
           <h1 className="mt-4 text-2xl font-bold text-slate-950">로그인</h1>
           <p className="mt-2 text-sm text-slate-500">

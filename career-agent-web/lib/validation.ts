@@ -51,24 +51,72 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-export function isCareerAnalysis(value: unknown): value is CareerAnalysis {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const v = value as Record<string, unknown>;
-  const s = v.scoreItems;
-  if (!s || typeof s !== "object" || Array.isArray(s)) return false;
-  const si = s as Record<string, unknown>;
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isScoreItems(value: unknown): value is CareerAnalysis["scoreItems"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const scoreItems = value as Record<string, unknown>;
   return (
-    typeof v.recommendedCareer === "string" &&
-    typeof v.totalScore === "number" &&
-    typeof si.majorFit === "number" &&
-    typeof si.techStack === "number" &&
-    typeof si.projectExperience === "number" &&
-    typeof si.certificates === "number" &&
-    typeof si.careerClarity === "number" &&
-    typeof si.actionability === "number" &&
-    isStringArray(v.scoreReasons) &&
-    isStringArray(v.strengths) &&
-    isStringArray(v.gaps) &&
-    isStringArray(v.nextActions)
+    isFiniteNumber(scoreItems.majorFit) &&
+    isFiniteNumber(scoreItems.techStack) &&
+    isFiniteNumber(scoreItems.projectExperience) &&
+    isFiniteNumber(scoreItems.contestExperience) &&
+    isFiniteNumber(scoreItems.certificates) &&
+    isFiniteNumber(scoreItems.careerClarity) &&
+    isFiniteNumber(scoreItems.actionability)
+  );
+}
+
+function isTopCareer(value: unknown): value is CareerAnalysis["topCareers"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const career = value as Record<string, unknown>;
+  return (
+    typeof career.name === "string" &&
+    isFiniteNumber(career.fitScore) &&
+    typeof career.reason === "string" &&
+    isStringArray(career.missingSkills) &&
+    isStringArray(career.recommendedActions)
+  );
+}
+
+function isRoadmapWeek(value: unknown): value is CareerAnalysis["roadmap"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const week = value as Record<string, unknown>;
+  return (
+    isFiniteNumber(week.week) &&
+    typeof week.title === "string" &&
+    isStringArray(week.actions)
+  );
+}
+
+export function isCareerAnalysis(value: unknown): value is CareerAnalysis {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const analysis = value as Record<string, unknown>;
+  return (
+    typeof analysis.recommendedCareer === "string" &&
+    isFiniteNumber(analysis.totalScore) &&
+    isScoreItems(analysis.scoreItems) &&
+    Array.isArray(analysis.topCareers) &&
+    analysis.topCareers.every(isTopCareer) &&
+    Array.isArray(analysis.roadmap) &&
+    analysis.roadmap.every(isRoadmapWeek) &&
+    isStringArray(analysis.scoreReasons) &&
+    isStringArray(analysis.strengths) &&
+    isStringArray(analysis.gaps) &&
+    isStringArray(analysis.nextActions)
   );
 }
