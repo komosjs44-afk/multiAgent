@@ -4,23 +4,21 @@ import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
 
-import { mergeEvidenceToProfile } from "@/lib/evidenceMapper";
 import { formatCareerReport } from "@/lib/reportFormatter";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { isCareerAnalysis, validateProfile } from "@/lib/validation";
 import type {
+  AcademicRecord,
   CareerAnalysis,
-  EvidenceAnalysisDraft,
-  EvidenceDocument,
-  EvidenceDocumentType,
-  ExtractedEvidence,
+  EvidenceRecord,
+  EvidenceRecordType,
   UserProfile,
 } from "@/types/career";
 
 const initialProfile: UserProfile = {
   major: "",
   grade: "",
-  career: "",
+  career: "공기업 전산직",
   skills: "",
   projects: "",
   certificates: "",
@@ -31,26 +29,10 @@ const profileFields: Array<{
   label: string;
   placeholder: string;
 }> = [
-  {
-    id: "major",
-    label: "학과",
-    placeholder: "컴퓨터공학과",
-  },
-  {
-    id: "grade",
-    label: "학년",
-    placeholder: "3",
-  },
-  {
-    id: "career",
-    label: "관심 진로",
-    placeholder: "공기업 전산직",
-  },
-  {
-    id: "skills",
-    label: "보유 기술",
-    placeholder: "Python, SQL, React",
-  },
+  { id: "major", label: "학과", placeholder: "컴퓨터공학과" },
+  { id: "grade", label: "학년", placeholder: "3" },
+  { id: "career", label: "목표 진로", placeholder: "공기업 전산직" },
+  { id: "skills", label: "보유 기술", placeholder: "SQL, Python, 운영체제" },
 ];
 
 function hasAnyInput(profile: UserProfile) {
@@ -60,27 +42,19 @@ function hasAnyInput(profile: UserProfile) {
 export default function Home() {
   const [profile, setProfile] = useState<UserProfile>(initialProfile);
   const [result, setResult] = useState<CareerAnalysis | null>(null);
-  const [message, setMessage] = useState("아직 분석 전입니다.");
+  const [message, setMessage] = useState("프로필을 입력하면 공고 기반 분석을 시작합니다.");
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof UserProfile, string>>
   >({});
   const [copyMessage, setCopyMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<
-    "idle" | "saving" | "saved" | "failed"
-  >("idle");
-  const [evidenceFiles, setEvidenceFiles] = useState<EvidenceDocument[]>([]);
-  const [isExtracting, setIsExtracting] = useState(false);
-  const [extractError, setExtractError] = useState("");
-  const [showDraft, setShowDraft] = useState(false);
-  const [draftEdits, setDraftEdits] = useState<EvidenceAnalysisDraft>({
-    skills: "",
-    certificates: "",
-    projects: "",
-  });
-  const [mergeMessage, setMergeMessage] = useState("");
+  const [privacyConsent, setPrivacyConsent] = useState(() =>
+    typeof window === "undefined"
+      ? false
+      : window.localStorage.getItem("career-agent-privacy-consent") === "true",
+  );
+  const [canSaveToDb, setCanSaveToDb] = useState(false);
 
   const hasInput = useMemo(() => hasAnyInput(profile), [profile]);
 
@@ -89,26 +63,19 @@ export default function Home() {
       return;
     }
 
-    const supabase = createClient();
-    supabase.auth
-      .getUser()
-      .then(({ data: { user } }) => setUserId(user?.id ?? null))
-      .catch(() => setUserId(null));
+    createClient()
+      .auth.getUser()
+      .then(({ data: { user } }) => setCanSaveToDb(Boolean(user)))
+      .catch(() => setCanSaveToDb(false));
   }, []);
 
   function handleChange(
     event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) {
     const { name, value } = event.target;
-    setProfile((current) => ({
-      ...current,
-      [name]: value,
-    }));
+    setProfile((current) => ({ ...current, [name]: value }));
     setCopyMessage("");
-    setFieldErrors((current) => ({
-      ...current,
-      [name]: undefined,
-    }));
+    setFieldErrors((current) => ({ ...current, [name]: undefined }));
   }
 
   async function handleAnalyze(event: FormEvent<HTMLFormElement>) {
@@ -117,31 +84,28 @@ export default function Home() {
     if (!hasAnyInput(profile)) {
       setResult(null);
       setError("");
-      setMessage("먼저 프로필 정보를 하나 이상 입력해주세요.");
+      setMessage("먼저 프로필 정보를 하나 이상 입력해 주세요.");
       return;
     }
 
     const validation = validateProfile(profile);
     if (!validation.isValid) {
       setResult(null);
-      setError("입력값을 확인해주세요.");
+      setError("입력값을 확인해 주세요.");
       setFieldErrors(validation.errors);
-      setMessage("필수 입력과 학년 형식을 확인해야 합니다.");
+      setMessage("학과, 학년, 목표 진로는 필수입니다.");
       return;
     }
 
     setIsLoading(true);
     setError("");
     setFieldErrors({});
-    setSaveStatus("idle");
-    setMessage("입력값을 분석하고 있습니다.");
+    setMessage("공고와 역량을 비교하고 있습니다.");
 
     try {
       const response = await fetch("/api/analyze-career", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile),
       });
 
@@ -149,25 +113,18 @@ export default function Home() {
         const errorBody = (await response.json().catch(() => null)) as {
           errors?: Partial<Record<keyof UserProfile, string>>;
         } | null;
-
-        if (errorBody?.errors) {
-          setFieldErrors(errorBody.errors);
-        }
-
+        if (errorBody?.errors) setFieldErrors(errorBody.errors);
         throw new Error("server");
       }
 
       const json: unknown = await response.json();
-      if (!isCareerAnalysis(json)) {
-        throw new Error("invalid_response");
-      }
+      if (!isCareerAnalysis(json)) throw new Error("invalid_response");
 
       setResult(json);
       setCopyMessage("");
-      setMessage("입력값을 기준으로 rule-based 분석 결과를 만들었습니다.");
+      setMessage("공고 추천, 예상 적합도, 보완 루틴을 생성했습니다.");
 
-      if (userId) {
-        setSaveStatus("saving");
+      if (privacyConsent && canSaveToDb) {
         fetch("/api/analysis-history", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -175,20 +132,18 @@ export default function Home() {
             input_profile: profile,
             analysis_result: json,
           }),
-        })
-          .then((res) => setSaveStatus(res.ok ? "saved" : "failed"))
-          .catch(() => setSaveStatus("failed"));
+        }).catch(() => {
+          // 분석 자체는 성공했으므로 이력 저장 실패는 화면 흐름을 막지 않습니다.
+        });
       }
     } catch (err) {
       setResult(null);
       const msg = err instanceof Error ? err.message : "";
-      if (msg === "invalid_response") {
-        setError("서버에서 올바르지 않은 응답을 받았습니다. 잠시 후 다시 시도해주세요.");
-      } else if (msg === "server") {
-        setError("분석 요청에 실패했습니다. 입력값을 확인하고 다시 시도해주세요.");
-      } else {
-        setError("네트워크 연결을 확인하고 다시 시도해주세요.");
-      }
+      setError(
+        msg === "invalid_response"
+          ? "서버 응답 형식이 올바르지 않습니다."
+          : "분석 요청에 실패했습니다. 입력값이나 API 설정을 확인해 주세요.",
+      );
       setMessage("분석 실패");
     } finally {
       setIsLoading(false);
@@ -196,98 +151,20 @@ export default function Home() {
   }
 
   async function handleCopyReport() {
-    if (!result) {
-      return;
-    }
+    if (!result) return;
 
     try {
       await navigator.clipboard.writeText(formatCareerReport(result));
       setCopyMessage("Markdown 리포트를 클립보드에 복사했습니다.");
     } catch {
-      setCopyMessage("복사에 실패했습니다. 브라우저 권한을 확인해주세요.");
+      setCopyMessage("복사에 실패했습니다. 브라우저 권한을 확인해 주세요.");
     }
   }
 
-  function handleFileAdd(event: ChangeEvent<HTMLInputElement>) {
-    const { files } = event.target;
-    if (!files) return;
-
-    const newDocs: EvidenceDocument[] = Array.from(files).map((file) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      fileName: file.name,
-      docType: "certificate" as EvidenceDocumentType,
-      file,
-    }));
-
-    setEvidenceFiles((prev) => [...prev, ...newDocs]);
-    event.target.value = "";
-  }
-
-  function handleDocTypeChange(id: string, docType: EvidenceDocumentType) {
-    setEvidenceFiles((prev) =>
-      prev.map((doc) => (doc.id === id ? { ...doc, docType } : doc)),
-    );
-  }
-
-  function handleFileRemove(id: string) {
-    setEvidenceFiles((prev) => prev.filter((doc) => doc.id !== id));
-  }
-
-  async function handleExtract() {
-    if (!evidenceFiles.length) return;
-
-    setIsExtracting(true);
-    setExtractError("");
-
-    try {
-      const results = await Promise.all(
-        evidenceFiles.map(async (doc) => {
-          const formData = new FormData();
-          formData.append("file", doc.file);
-          formData.append("docType", doc.docType);
-          formData.append("fileName", doc.fileName);
-
-          const response = await fetch("/api/evidence/extract", {
-            method: "POST",
-            body: formData,
-          });
-
-          if (!response.ok) throw new Error("extract_failed");
-          return response.json() as Promise<ExtractedEvidence>;
-        }),
-      );
-
-      const allSkills = [...new Set(results.flatMap((r) => r.skills))];
-      const allCerts = [...new Set(results.flatMap((r) => r.certificates))];
-      const allProjects = [...new Set(results.flatMap((r) => r.projects))];
-
-      setDraftEdits({
-        skills: allSkills.join(", "),
-        certificates: allCerts.join(", "),
-        projects: allProjects.join("\n"),
-      });
-      setShowDraft(true);
-    } catch {
-      setExtractError("추출 중 오류가 발생했습니다. 다시 시도해주세요.");
-    } finally {
-      setIsExtracting(false);
-    }
-  }
-
-  function handleDraftChange(
-    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
-  ) {
-    const { name, value } = event.target;
-    setDraftEdits((prev) => ({ ...prev, [name]: value }));
-  }
-
-  function handleMergeToProfile() {
-    setProfile((prev) => mergeEvidenceToProfile(prev, draftEdits));
-    setShowDraft(false);
-    setEvidenceFiles([]);
-    setDraftEdits({ skills: "", certificates: "", projects: "" });
-    setMergeMessage("추출된 정보가 프로필에 반영되었습니다.");
-    setTimeout(() => setMergeMessage(""), 3000);
+  function handleConsentChange(event: ChangeEvent<HTMLInputElement>) {
+    const checked = event.target.checked;
+    setPrivacyConsent(checked);
+    window.localStorage.setItem("career-agent-privacy-consent", String(checked));
   }
 
   return (
@@ -300,10 +177,11 @@ export default function Home() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-3xl">
               <h1 className="text-4xl font-bold tracking-normal text-slate-950 sm:text-5xl">
-                Career Agent
+                공고 기반 커리어 분석
               </h1>
               <p className="mt-4 text-base leading-7 text-slate-600 sm:text-lg">
-                대학생의 진로 목표, 기술스택, 프로젝트 경험을 바탕으로 개발 성장 전략을 제안하는 AI Agent
+                현재 역량을 공기업 전산직 공고 요구사항과 비교해 추천 공고,
+                역량 기반 예상 적합도, 보완 루틴, 시스템 리스크를 함께 정리합니다.
               </p>
             </div>
             <Link
@@ -322,7 +200,8 @@ export default function Home() {
                 프로필 입력
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                입력값은 서버 API Route에서 rule-based 방식으로 분석됩니다.
+                이력서 검증 전 단계이므로 학습/프로젝트/자격증 키워드만
+                사용해 역량 기반으로 분석합니다.
               </p>
             </div>
 
@@ -343,7 +222,7 @@ export default function Home() {
                       onChange={handleChange}
                       placeholder={field.placeholder}
                       aria-invalid={Boolean(fieldErrors[field.id])}
-                      className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 aria-[invalid=true]:border-red-400 aria-[invalid=true]:focus:border-red-500 aria-[invalid=true]:focus:ring-red-100"
+                      className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 aria-[invalid=true]:border-red-400"
                     />
                     {fieldErrors[field.id] ? (
                       <span className="text-xs font-medium text-red-600">
@@ -364,7 +243,7 @@ export default function Home() {
                   name="projects"
                   value={profile.projects}
                   onChange={handleChange}
-                  placeholder="프로젝트 이름, 맡은 역할, 사용 기술, GitHub/배포 경험을 적어주세요."
+                  placeholder="DB 프로젝트, 알고리즘/운영체제 학습, 팀 프로젝트 역할, GitHub/배포 경험 등을 적어 주세요."
                   className="min-h-28 resize-none rounded-md border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
                 />
               </label>
@@ -373,16 +252,43 @@ export default function Home() {
                 htmlFor="certificates"
                 className="grid gap-2 text-sm font-medium text-slate-700"
               >
-                자격증
+                자격증/시험 준비
                 <input
                   id="certificates"
                   name="certificates"
                   type="text"
                   value={profile.certificates}
                   onChange={handleChange}
-                  placeholder="정보처리기사 필기, SQLD 등"
+                  placeholder="정보처리기사 필기 준비, SQLD 등"
                   className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
                 />
+              </label>
+
+              <label className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+                <span className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={privacyConsent}
+                    onChange={handleConsentChange}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
+                  />
+                  <span>
+                    <span className="font-semibold text-slate-900">
+                      개인정보 및 활동 기록 저장에 동의합니다.
+                    </span>
+                    <span className="mt-1 block text-slate-500">
+                      입력한 프로필, 프로젝트, 성적, 활동 기록은 개인 맞춤형 진로
+                      분석과 역량 추천을 위해 저장됩니다. 사용자는 언제든지 저장된
+                      데이터를 수정하거나 삭제할 수 있습니다. 본 서비스는 실제
+                      합격률을 예측하지 않으며, 입력 데이터와 공고 요구역량을
+                      기반으로 한 참고용 분석 결과를 제공합니다.
+                    </span>
+                    <span className="mt-1 block text-slate-400">
+                      동의하지 않아도 체험 분석은 가능합니다. 단, DB 저장과 이력
+                      저장은 비활성화됩니다.
+                    </span>
+                  </span>
+                </span>
               </label>
 
               <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -394,8 +300,8 @@ export default function Home() {
                 </div>
                 <button
                   type="submit"
-                  className="h-12 w-full rounded-md bg-emerald-700 px-6 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
                   disabled={!hasInput || isLoading}
+                  className="h-12 w-full rounded-md bg-emerald-700 px-6 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
                 >
                   {isLoading ? "분석 중..." : "분석하기"}
                 </button>
@@ -404,60 +310,43 @@ export default function Home() {
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <div className="mb-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h2 className="text-xl font-semibold text-slate-950">
-                    결과 미리보기
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    API 응답을 바탕으로 점수, 추천 진로, 로드맵을 표시합니다.
-                  </p>
-                </div>
-                {result ? (
-                  <button
-                    type="button"
-                    onClick={handleCopyReport}
-                    className="h-10 w-full rounded-md border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:w-auto"
-                  >
-                    리포트 복사하기
-                  </button>
-                ) : null}
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-950">
+                  결과 미리보기
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  합격률은 실제 확률이 아니라 공고 요구역량 기반 예상 적합도입니다.
+                </p>
               </div>
-              {saveStatus !== "idle" && (
-                <p
-                  className={`mt-2 text-xs font-medium ${
-                    saveStatus === "saved"
-                      ? "text-emerald-600"
-                      : saveStatus === "failed"
-                        ? "text-red-500"
-                        : "text-slate-400"
-                  }`}
+              {result ? (
+                <button
+                  type="button"
+                  onClick={handleCopyReport}
+                  className="h-10 w-full rounded-md border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 sm:w-auto"
                 >
-                  {saveStatus === "saving" && "저장 중..."}
-                  {saveStatus === "saved" && "분석 기록이 저장되었습니다."}
-                  {saveStatus === "failed" && "저장에 실패했습니다."}
-                </p>
-              )}
-              {copyMessage ? (
-                <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                  {copyMessage}
-                </p>
+                  리포트 복사
+                </button>
               ) : null}
             </div>
+
+            {copyMessage ? (
+              <p className="mb-4 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                {copyMessage}
+              </p>
+            ) : null}
 
             {result ? (
               <div className="grid gap-4">
                 <TotalScoreCard score={result.totalScore} />
+                <JobRecommendationList recommendations={result.jobRecommendations} />
                 <TopCareerList careers={result.topCareers} />
                 <ScoreBreakdown scoreItems={result.scoreItems} />
-                <ResultList label="점수 산정 이유" items={result.scoreReasons} />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ResultList label="강점" items={result.strengths} tone="good" />
-                  <ResultList label="부족한 점" items={result.gaps} tone="warn" />
-                </div>
+                <ResultList label="강점" items={result.strengths} tone="good" />
+                <ResultList label="부족 역량" items={result.gaps} tone="warn" />
                 <ActionChecklist items={result.nextActions} />
                 <RoadmapList roadmap={result.roadmap} />
+                <SystemRiskList risks={result.systemRisks} />
               </div>
             ) : (
               <EmptyResult />
@@ -465,169 +354,537 @@ export default function Home() {
           </section>
         </div>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="mb-5">
-            <h2 className="text-xl font-semibold text-slate-950">
-              증빙서류 업로드
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              성적표, 자격증 확인서, 공모전 수상 내역, 포트폴리오를 업로드하면
-              프로필 정보를 자동으로 추출합니다.
-            </p>
-          </div>
-
-          <label htmlFor="evidence-upload">
-            <div className="cursor-pointer rounded-md border-2 border-dashed border-slate-300 p-6 text-center transition hover:border-emerald-400 hover:bg-slate-50">
-              <p className="text-sm font-medium text-slate-600">
-                파일을 클릭하여 선택
-              </p>
-              <p className="mt-1 text-xs text-slate-400">
-                PDF, JPG, PNG 형식 지원
-              </p>
-            </div>
-            <input
-              id="evidence-upload"
-              type="file"
-              multiple
-              accept=".pdf,.jpg,.jpeg,.png"
-              className="sr-only"
-              onChange={handleFileAdd}
-            />
-          </label>
-
-          {evidenceFiles.length > 0 && (
-            <ul className="mt-4 grid gap-2">
-              {evidenceFiles.map((doc) => (
-                <li
-                  key={doc.id}
-                  className="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-slate-50 p-3"
-                >
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
-                    {doc.fileName}
-                  </p>
-                  <select
-                    value={doc.docType}
-                    onChange={(e) =>
-                      handleDocTypeChange(
-                        doc.id,
-                        e.target.value as EvidenceDocumentType,
-                      )
-                    }
-                    className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-700 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
-                  >
-                    <option value="transcript">성적표</option>
-                    <option value="contest">공모전/해커톤 확인서</option>
-                    <option value="certificate">자격증 확인서</option>
-                    <option value="portfolio">포트폴리오</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => handleFileRemove(doc.id)}
-                    aria-label={`${doc.fileName} 삭제`}
-                    className="text-sm text-slate-400 transition hover:text-red-500"
-                  >
-                    ✕
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {extractError && (
-            <p className="mt-3 text-sm font-medium text-red-600">
-              {extractError}
-            </p>
-          )}
-
-          {evidenceFiles.length > 0 && (
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={handleExtract}
-                disabled={isExtracting}
-                className="h-10 rounded-md bg-emerald-700 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300"
-              >
-                {isExtracting ? "추출 중..." : "정보 추출하기"}
-              </button>
-            </div>
-          )}
-        </section>
-
-        {showDraft && (
-          <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-5 shadow-sm sm:p-6">
-            <div className="mb-5">
-              <h2 className="text-xl font-semibold text-slate-950">
-                추출 결과 확인
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                추출된 정보를 확인하고 수정한 뒤 프로필에 반영하세요. 기존
-                입력값은 보강됩니다.
-              </p>
-            </div>
-
-            <div className="grid gap-4">
-              <label className="grid gap-2 text-sm font-medium text-slate-700">
-                기술 키워드 (쉼표로 구분)
-                <input
-                  type="text"
-                  name="skills"
-                  value={draftEdits.skills}
-                  onChange={handleDraftChange}
-                  placeholder="Python, React, SQL"
-                  className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-medium text-slate-700">
-                자격증 (쉼표로 구분)
-                <input
-                  type="text"
-                  name="certificates"
-                  value={draftEdits.certificates}
-                  onChange={handleDraftChange}
-                  placeholder="정보처리기사, SQLD"
-                  className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-medium text-slate-700">
-                프로젝트/공모전 내역
-                <textarea
-                  name="projects"
-                  value={draftEdits.projects}
-                  onChange={handleDraftChange}
-                  placeholder="프로젝트 이름, 역할, 기술 등"
-                  className="min-h-24 resize-none rounded-md border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
-                />
-              </label>
-
-              <div className="flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowDraft(false)}
-                  className="h-10 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
-                >
-                  취소
-                </button>
-                <button
-                  type="button"
-                  onClick={handleMergeToProfile}
-                  className="h-10 rounded-md bg-emerald-700 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
-                >
-                  이 정보로 분석에 반영하기
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {mergeMessage && (
-          <p className="rounded-md bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
-            {mergeMessage}
-          </p>
-        )}
+        <CareerDbPanel profile={profile} privacyConsent={privacyConsent} />
       </section>
     </main>
+  );
+}
+
+const evidenceTypeLabels: Record<EvidenceRecordType, string> = {
+  award: "수상",
+  project: "프로젝트",
+  certificate: "자격증",
+  hackathon: "해커톤",
+  study: "스터디",
+  internship: "인턴십",
+  activity: "활동",
+};
+
+const emptyEvidenceForm = {
+  type: "project" as EvidenceRecordType,
+  title: "",
+  organization: "",
+  description: "",
+  role: "",
+  result: "",
+  skills: "",
+};
+
+const emptyAcademicForm = {
+  course_name: "",
+  credit: "",
+  grade: "",
+  semester: "",
+  skill_mapping: "",
+};
+
+function CareerDbPanel({
+  profile,
+  privacyConsent,
+}: {
+  profile: UserProfile;
+  privacyConsent: boolean;
+}) {
+  const [isConfigured] = useState(isSupabaseConfigured);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [evidenceRows, setEvidenceRows] = useState<EvidenceRecord[]>([]);
+  const [academicRows, setAcademicRows] = useState<AcademicRecord[]>([]);
+  const [form, setForm] = useState(emptyEvidenceForm);
+  const [academicForm, setAcademicForm] = useState(emptyAcademicForm);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function load() {
+      if (!isConfigured) {
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          setIsLoggedIn(false);
+          setIsLoading(false);
+          return;
+        }
+
+        setIsLoggedIn(true);
+        const [evidenceResponse, academicResponse] = await Promise.all([
+          fetch("/api/evidence-records", { cache: "no-store" }),
+          fetch("/api/academic-records", { cache: "no-store" }),
+        ]);
+        const evidencePayload = (await evidenceResponse.json().catch(() => null)) as {
+          data?: EvidenceRecord[];
+        } | null;
+        const academicPayload = (await academicResponse.json().catch(() => null)) as {
+          data?: AcademicRecord[];
+        } | null;
+
+        if (!ignore && evidenceResponse.ok && Array.isArray(evidencePayload?.data)) {
+          setEvidenceRows(evidencePayload.data);
+        }
+        if (!ignore && academicResponse.ok && Array.isArray(academicPayload?.data)) {
+          setAcademicRows(academicPayload.data);
+        }
+      } catch {
+        if (!ignore) {
+          setMessage("Career DB 정보를 불러오지 못했습니다.");
+        }
+      } finally {
+        if (!ignore) setIsLoading(false);
+      }
+    }
+
+    load();
+
+    return () => {
+      ignore = true;
+    };
+  }, [isConfigured]);
+
+  function handleEvidenceChange(
+    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
+  ) {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  function handleAcademicChange(event: ChangeEvent<HTMLInputElement>) {
+    const { name, value } = event.target;
+    setAcademicForm((current) => ({ ...current, [name]: value }));
+  }
+
+  async function handleSaveProfile() {
+    setMessage("");
+    if (!privacyConsent) {
+      setMessage("개인정보 저장 동의 후 Career Profile을 저장할 수 있습니다.");
+      return;
+    }
+
+    const response = await fetch("/api/career-profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "",
+        university: "",
+        major: profile.major,
+        grade: profile.grade,
+        target_career: profile.career,
+      }),
+    });
+
+    setMessage(
+      response.ok
+        ? "Career Profile을 저장했습니다."
+        : "Profile 저장에 실패했습니다. 로그인 상태와 Supabase 설정을 확인해 주세요.",
+    );
+  }
+
+  async function handleSaveEvidence(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    if (!privacyConsent) {
+      setMessage("개인정보 저장 동의 후 Evidence를 저장할 수 있습니다.");
+      return;
+    }
+
+    const response = await fetch("/api/evidence-records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+
+    const payload = (await response.json().catch(() => null)) as {
+      data?: EvidenceRecord[];
+    } | null;
+
+    if (response.ok) {
+      setEvidenceRows((current) => [
+        ...((Array.isArray(payload?.data) ? payload.data : []) as EvidenceRecord[]),
+        ...current,
+      ]);
+      setForm(emptyEvidenceForm);
+      setMessage("Evidence를 저장했습니다. 다음 분석부터 자동 반영됩니다.");
+    } else {
+      setMessage("Evidence 저장에 실패했습니다. 로그인 상태와 테이블 설정을 확인해 주세요.");
+    }
+  }
+
+  async function handleDeleteEvidence(id: string) {
+    const response = await fetch(`/api/evidence-records?id=${id}`, {
+      method: "DELETE",
+    });
+
+    if (response.ok) {
+      setEvidenceRows((current) => current.filter((item) => item.id !== id));
+      setMessage("Evidence를 삭제했습니다.");
+    } else {
+      setMessage("Evidence 삭제에 실패했습니다.");
+    }
+  }
+
+  async function handleSaveAcademic(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    if (!privacyConsent) {
+      setMessage("개인정보 저장 동의 후 성적/수업 기록을 저장할 수 있습니다.");
+      return;
+    }
+
+    const response = await fetch("/api/academic-records", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(academicForm),
+    });
+
+    const payload = (await response.json().catch(() => null)) as {
+      data?: AcademicRecord[];
+    } | null;
+
+    if (response.ok) {
+      setAcademicRows((current) => [
+        ...((Array.isArray(payload?.data) ? payload.data : []) as AcademicRecord[]),
+        ...current,
+      ]);
+      setAcademicForm(emptyAcademicForm);
+      setMessage("성적/수업 기록을 저장했습니다. 다음 분석부터 자동 반영됩니다.");
+    } else {
+      setMessage("성적/수업 기록 저장에 실패했습니다. 로그인 상태와 테이블 설정을 확인해 주세요.");
+    }
+  }
+
+  if (!isConfigured) {
+    return (
+      <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 shadow-sm sm:p-6">
+        <h2 className="text-xl font-semibold text-slate-950">
+          Career DB / Evidence 저장
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-amber-900">
+          현재는 Supabase 환경변수가 없어 체험 모드로 동작합니다. 로그인 기반
+          Career DB와 Evidence 저장은 `NEXT_PUBLIC_SUPABASE_URL`,
+          `NEXT_PUBLIC_SUPABASE_ANON_KEY` 설정 후 사용할 수 있습니다.
+        </p>
+      </section>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <p className="text-sm text-slate-500">Career DB 상태를 확인하는 중입니다.</p>
+      </section>
+    );
+  }
+
+  if (!isLoggedIn) {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <h2 className="text-xl font-semibold text-slate-950">
+          Career DB / Evidence 저장
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-slate-500">
+          로그인하면 Career Profile과 Evidence를 개인 DB에 저장하고 다음 분석에
+          자동 반영할 수 있습니다.
+        </p>
+        <Link
+          href="/login"
+          className="mt-4 inline-flex h-10 items-center rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800"
+        >
+          로그인하기
+        </Link>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-950">
+            Career DB / Evidence 저장
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            저장한 Evidence는 다음 분석 요청 때 기술역량으로 변환되어 공고 매칭에
+            반영됩니다.
+          </p>
+          {!privacyConsent ? (
+            <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              개인정보 저장 동의가 꺼져 있어 DB 저장은 비활성화되어 있습니다.
+              체험 분석은 그대로 사용할 수 있습니다.
+            </p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={handleSaveProfile}
+          disabled={!privacyConsent}
+          className="h-10 rounded-md border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
+        >
+          현재 Profile 저장
+        </button>
+      </div>
+
+      {message ? (
+        <p className="mb-4 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+          {message}
+        </p>
+      ) : null}
+
+      <form className="grid gap-4" onSubmit={handleSaveEvidence}>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            Evidence type
+            <select
+              name="type"
+              value={form.type}
+              onChange={handleEvidenceChange}
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            >
+              {Object.entries(evidenceTypeLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-slate-700 sm:col-span-2">
+            제목
+            <input
+              name="title"
+              value={form.title}
+              onChange={handleEvidenceChange}
+              required
+              placeholder="Pay-Mate 프로젝트, 정보보안 발표, SQLD 등"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            기관/소속
+            <input
+              name="organization"
+              value={form.organization}
+              onChange={handleEvidenceChange}
+              placeholder="학교, 동아리, 주최 기관"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            역할
+            <input
+              name="role"
+              value={form.role}
+              onChange={handleEvidenceChange}
+              placeholder="백엔드, 팀장, 발표자"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+        </div>
+
+        <label className="grid gap-2 text-sm font-medium text-slate-700">
+          설명
+          <textarea
+            name="description"
+            value={form.description}
+            onChange={handleEvidenceChange}
+            placeholder="무엇을 했고 어떤 문제를 해결했는지 적어 주세요."
+            className="min-h-24 resize-none rounded-md border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+          />
+        </label>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            결과
+            <input
+              name="result"
+              value={form.result}
+              onChange={handleEvidenceChange}
+              placeholder="수상, 배포, 발표 완료, 성능 개선"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            매핑 역량
+            <input
+              name="skills"
+              value={form.skills}
+              onChange={handleEvidenceChange}
+              placeholder="DB, 백엔드, 보안, 문서화"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={!privacyConsent}
+            className="h-11 rounded-md bg-emerald-700 px-5 text-sm font-semibold text-white transition hover:bg-emerald-800"
+          >
+            Evidence 저장
+          </button>
+        </div>
+      </form>
+
+      <form className="mt-8 grid gap-4 border-t border-slate-100 pt-6" onSubmit={handleSaveAcademic}>
+        <div>
+          <h3 className="text-sm font-semibold text-slate-500">
+            성적/수업 기록 저장
+          </h3>
+          <p className="mt-1 text-sm text-slate-500">
+            PDF 자동 파싱은 아직 제외되어 있으며, 현재는 사용자가 확인한 과목 기록을 직접 저장합니다.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-4">
+          <label className="grid gap-2 text-sm font-medium text-slate-700 sm:col-span-2">
+            과목명
+            <input
+              name="course_name"
+              value={academicForm.course_name}
+              onChange={handleAcademicChange}
+              required
+              placeholder="데이터베이스, 운영체제, 네트워크"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            학점
+            <input
+              name="credit"
+              value={academicForm.credit}
+              onChange={handleAcademicChange}
+              placeholder="3"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            성적
+            <input
+              name="grade"
+              value={academicForm.grade}
+              onChange={handleAcademicChange}
+              placeholder="A+"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            학기
+            <input
+              name="semester"
+              value={academicForm.semester}
+              onChange={handleAcademicChange}
+              placeholder="2025-1"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            매핑 역량
+            <input
+              name="skill_mapping"
+              value={academicForm.skill_mapping}
+              onChange={handleAcademicChange}
+              placeholder="DB, SQL, 운영체제"
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+            />
+          </label>
+        </div>
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={!privacyConsent}
+            className="h-11 rounded-md bg-emerald-700 px-5 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            성적/수업 기록 저장
+          </button>
+        </div>
+      </form>
+
+      <div className="mt-6">
+        <h3 className="text-sm font-semibold text-slate-500">저장된 Evidence</h3>
+        {evidenceRows.length ? (
+          <ul className="mt-3 grid gap-3">
+            {evidenceRows.map((item) => (
+              <li
+                key={item.id}
+                className="flex flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-start sm:justify-between"
+              >
+                <div>
+                  <p className="text-sm font-semibold text-slate-950">
+                    [{evidenceTypeLabels[item.type]}] {item.title}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    {item.evidence_text}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    역량: {item.skills.join(", ") || "미지정"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteEvidence(item.id)}
+                  className="h-8 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-500 transition hover:text-red-600"
+                >
+                  삭제
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+            아직 저장된 Evidence가 없습니다.
+          </p>
+        )}
+      </div>
+
+      <div className="mt-6">
+        <h3 className="text-sm font-semibold text-slate-500">저장된 성적/수업 기록</h3>
+        {academicRows.length ? (
+          <ul className="mt-3 grid gap-3">
+            {academicRows.map((item) => (
+              <li
+                key={item.id}
+                className="rounded-md border border-slate-200 bg-slate-50 p-3"
+              >
+                <p className="text-sm font-semibold text-slate-950">
+                  {item.course_name} {item.grade ? `(${item.grade})` : ""}
+                </p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {item.semester || "학기 미입력"} / {item.credit ?? "-"}학점
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  역량: {item.skill_mapping.join(", ") || "미지정"}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+            아직 저장된 성적/수업 기록이 없습니다.
+          </p>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -636,7 +893,8 @@ function EmptyResult() {
     <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-5">
       <p className="text-sm font-semibold text-slate-700">입력 대기 중</p>
       <p className="mt-2 text-sm leading-6 text-slate-500">
-        학과, 관심 진로, 보유 기술, 프로젝트 경험을 입력하고 분석하기를 누르면 rule-based 결과가 표시됩니다.
+        학과, 학년, 목표 진로, 보유 기술, 프로젝트 경험을 입력하면 분석 결과가
+        표시됩니다.
       </p>
     </div>
   );
@@ -650,15 +908,11 @@ function TotalScoreCard({ score }: { score: number }) {
           <p className="text-sm font-semibold text-emerald-700">총점</p>
           <p className="mt-1 text-3xl font-bold text-emerald-950">
             {score}
-            <span className="text-base font-semibold text-emerald-700">
-              {" "}
-              / 100
-            </span>
+            <span className="text-base font-semibold text-emerald-700"> / 100</span>
           </p>
         </div>
         <p className="text-right text-sm leading-6 text-emerald-800">
-          입력 근거를 기준으로 산정한
-          <br className="hidden sm:block" /> rule-based 적합도입니다.
+          입력 근거와 공고 요구역량을 기준으로 계산했습니다.
         </p>
       </div>
       <div className="mt-4 h-3 overflow-hidden rounded-full bg-white">
@@ -668,6 +922,88 @@ function TotalScoreCard({ score }: { score: number }) {
         />
       </div>
     </div>
+  );
+}
+
+function JobRecommendationList({
+  recommendations,
+}: {
+  recommendations: CareerAnalysis["jobRecommendations"];
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-500">
+        공고 추천 및 역량 기반 예상 적합도
+      </p>
+      <div className="mt-3 grid gap-3">
+        {recommendations.map((job) => (
+          <section key={job.posting.id} className="rounded-md bg-white p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-slate-500">
+                    {job.posting.organization}
+                  </p>
+                  <ApiStatusBadge status={job.posting.sourceStatus} />
+                </div>
+                <h3 className="mt-1 text-base font-semibold text-slate-950">
+                  {job.posting.title}
+                </h3>
+                <p className="mt-1 text-xs text-slate-400">
+                  출처: {job.posting.source}
+                </p>
+              </div>
+              <p className="text-lg font-bold text-emerald-700">
+                {job.estimatedPassRate}점
+              </p>
+            </div>
+            <dl className="mt-3 grid gap-2 text-sm leading-6 text-slate-600">
+              <div>
+                <dt className="font-semibold text-slate-700">공고 상태</dt>
+                <dd>
+                  {job.posting.sourceStatus === "DEMO"
+                    ? "실제 API 데이터가 아닌 데모 공고입니다."
+                    : "외부 공고 API에서 가져온 LIVE 공고입니다."}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-slate-700">매칭 역량</dt>
+                <dd>{job.matchedSkills.join(", ") || "확인된 항목 없음"}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-slate-700">보완 역량</dt>
+                <dd>{job.missingSkills.join(", ") || "큰 공백 없음"}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-slate-700">추천 자격증</dt>
+                <dd>{job.recommendedCertificates.join(", ")}</dd>
+              </div>
+            </dl>
+            <ul className="mt-3 grid gap-2 text-sm leading-6 text-slate-700">
+              {job.boostRoutine.slice(0, 2).map((routine) => (
+                <li key={routine}>- {routine}</li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ApiStatusBadge({ status }: { status: "DEMO" | "LIVE" }) {
+  const isLive = status === "LIVE";
+
+  return (
+    <span
+      className={`inline-flex h-6 items-center rounded-full px-2 text-xs font-bold ${
+        isLive
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-amber-100 text-amber-700"
+      }`}
+    >
+      {status}
+    </span>
   );
 }
 
@@ -698,18 +1034,6 @@ function TopCareerList({
                 {career.fitScore}점
               </p>
             </div>
-            <div className="mt-3 grid gap-2 text-sm text-slate-600">
-              <p>
-                <span className="font-semibold text-slate-700">부족 역량:</span>{" "}
-                {career.missingSkills.length
-                  ? career.missingSkills.join(", ")
-                  : "큰 공백 없음"}
-              </p>
-              <p>
-                <span className="font-semibold text-slate-700">추천 액션:</span>{" "}
-                {career.recommendedActions[0]}
-              </p>
-            </div>
           </li>
         ))}
       </ol>
@@ -724,11 +1048,11 @@ function ScoreBreakdown({
 }) {
   const items = [
     ["전공 적합도", scoreItems.majorFit, 20],
-    ["기술스택", scoreItems.techStack, 20],
+    ["기술 스택", scoreItems.techStack, 20],
     ["프로젝트 경험", scoreItems.projectExperience, 20],
-    ["공모전 경험", scoreItems.contestExperience, 10],
+    ["공모전/대외활동", scoreItems.contestExperience, 10],
     ["자격증", scoreItems.certificates, 10],
-    ["진로 명확성", scoreItems.careerClarity, 10],
+    ["진로 명확도", scoreItems.careerClarity, 10],
     ["실행 가능성", scoreItems.actionability, 10],
   ] as const;
 
@@ -743,12 +1067,6 @@ function ScoreBreakdown({
               <dd className="font-semibold text-slate-950">
                 {score} / {maxScore}
               </dd>
-            </div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="h-full rounded-full bg-emerald-600"
-                style={{ width: `${(score / maxScore) * 100}%` }}
-              />
             </div>
           </div>
         ))}
@@ -827,6 +1145,31 @@ function RoadmapList({
                 <li key={action}>- {action}</li>
               ))}
             </ul>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SystemRiskList({
+  risks,
+}: {
+  risks: CareerAnalysis["systemRisks"];
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-500">
+        시스템 예상 문제점과 해결책
+      </p>
+      <div className="mt-3 grid gap-3">
+        {risks.map((risk) => (
+          <section key={risk.risk} className="rounded-md bg-white p-3">
+            <h3 className="text-sm font-semibold text-slate-950">{risk.risk}</h3>
+            <p className="mt-1 text-sm leading-6 text-slate-600">{risk.cause}</p>
+            <p className="mt-2 text-sm leading-6 text-emerald-800">
+              해결책: {risk.mitigation}
+            </p>
           </section>
         ))}
       </div>

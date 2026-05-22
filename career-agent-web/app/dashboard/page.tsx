@@ -19,7 +19,7 @@ function isHistoryRow(value: unknown): value is AnalysisHistoryRow {
   return (
     typeof row.id === "string" &&
     typeof row.created_at === "string" &&
-    isCareerAnalysis(row.analysis_result)
+    (isCareerAnalysis(row.analysis_result) || isCareerAnalysis(row.result_snapshot))
   );
 }
 
@@ -37,7 +37,9 @@ function getTopCareer(rows: AnalysisHistoryRow[]) {
   const counts = new Map<string, number>();
 
   rows.forEach((row) => {
-    const career = row.analysis_result.recommendedCareer;
+    const analysis = row.analysis_result ?? row.result_snapshot;
+    if (!analysis) return;
+    const career = analysis.recommendedCareer;
     counts.set(career, (counts.get(career) ?? 0) + 1);
   });
 
@@ -107,7 +109,10 @@ export default function DashboardPage() {
     const totalCount = rows.length;
     const averageScore = totalCount
       ? Math.round(
-          rows.reduce((sum, row) => sum + row.analysis_result.totalScore, 0) /
+          rows.reduce((sum, row) => {
+            const analysis = row.analysis_result ?? row.result_snapshot;
+            return sum + (analysis?.totalScore ?? row.score ?? 0);
+          }, 0) /
             totalCount,
         )
       : 0;
@@ -197,12 +202,12 @@ export default function DashboardPage() {
                       {formatDate(row.created_at)}
                     </p>
                     <h2 className="mt-2 text-xl font-semibold text-slate-950">
-                      {row.analysis_result.recommendedCareer}
+                      {(row.analysis_result ?? row.result_snapshot)?.recommendedCareer}
                     </h2>
                     <ul className="mt-3 grid gap-1 text-sm leading-6 text-slate-600">
-                      {row.analysis_result.strengths.slice(0, 2).map((strength) => (
+                      {(row.analysis_result ?? row.result_snapshot)?.strengths.slice(0, 2).map((strength) => (
                         <li key={strength}>- {strength}</li>
-                      ))}
+                      )) ?? null}
                     </ul>
                   </div>
                   <div className="rounded-md bg-emerald-50 px-4 py-3 text-center">
@@ -210,7 +215,7 @@ export default function DashboardPage() {
                       종합 점수
                     </p>
                     <p className="mt-1 text-2xl font-bold text-emerald-950">
-                      {row.analysis_result.totalScore}
+                      {(row.analysis_result ?? row.result_snapshot)?.totalScore ?? row.score ?? 0}
                     </p>
                   </div>
                 </div>
@@ -243,7 +248,11 @@ function AnalysisModal({
   row: AnalysisHistoryRow;
   onClose: () => void;
 }) {
-  const analysis = row.analysis_result;
+  const analysis = row.analysis_result ?? row.result_snapshot;
+
+  if (!analysis) {
+    return null;
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 sm:items-center sm:p-6">

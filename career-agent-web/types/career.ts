@@ -7,6 +7,85 @@ export type UserProfile = {
   certificates: string;
 };
 
+export type CareerProfileRecord = {
+  id: string;
+  user_id: string;
+  name: string;
+  university: string;
+  major: string;
+  grade: string;
+  target_career: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AcademicRecord = {
+  id: string;
+  user_id: string;
+  course_name: string;
+  credit: number | null;
+  grade: string;
+  semester: string;
+  skill_mapping: string[];
+  created_at: string;
+};
+
+export type EvidenceRecordType =
+  | "award"
+  | "project"
+  | "certificate"
+  | "hackathon"
+  | "study"
+  | "internship"
+  | "activity";
+
+export type EvidenceRecord = {
+  id: string;
+  user_id: string;
+  type: EvidenceRecordType;
+  title: string;
+  organization: string | null;
+  description: string | null;
+  role: string | null;
+  result: string | null;
+  skills: string[];
+  evidence_text: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobPosting = {
+  id: string;
+  title: string;
+  organization: string;
+  source: string;
+  sourceStatus: "DEMO" | "LIVE";
+  url?: string;
+  deadline?: string;
+  location?: string;
+  employmentType?: string;
+  description: string;
+  rawText: string;
+  requiredSkills: string[];
+  preferredCertificates: string[];
+  requiredExperience?: string;
+};
+
+export type JobRecommendation = {
+  posting: JobPosting;
+  fitScore: number;
+  estimatedPassRate: number;
+  matchedSkills: string[];
+  missingSkills: string[];
+  recommendedCertificates: string[];
+  boostRoutine: string[];
+  expectedProblems: Array<{
+    problem: string;
+    impact: string;
+    solution: string;
+  }>;
+};
+
 export type CareerAnalysis = {
   recommendedCareer: string;
   totalScore: number;
@@ -26,6 +105,7 @@ export type CareerAnalysis = {
     missingSkills: string[];
     recommendedActions: string[];
   }>;
+  jobRecommendations: JobRecommendation[];
   roadmap: Array<{
     week: number;
     title: string;
@@ -35,6 +115,11 @@ export type CareerAnalysis = {
   strengths: string[];
   gaps: string[];
   nextActions: string[];
+  systemRisks: Array<{
+    risk: string;
+    cause: string;
+    mitigation: string;
+  }>;
 };
 
 export type ValidationResult = {
@@ -45,8 +130,11 @@ export type ValidationResult = {
 export type AnalysisHistoryRow = {
   id: string;
   user_id: string | null;
-  input_profile: UserProfile;
-  analysis_result: CareerAnalysis;
+  input_profile?: UserProfile;
+  analysis_result?: CareerAnalysis;
+  input_snapshot?: UserProfile;
+  result_snapshot?: CareerAnalysis;
+  score?: number;
   created_at: string;
 };
 

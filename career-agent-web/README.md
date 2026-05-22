@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Career Agent Web
 
-## Getting Started
+Next.js 기반 공기업 전산직 AI Career Gap Analysis 웹앱이다.
 
-First, run the development server:
+## 서비스 방향
+
+공기업 전산직 준비생의 현재 역량을 데모 공고 또는 향후 잡알리오 LIVE 공고와 비교해 부족 역량, 준비 우선순위, 추천 학습 방향, 4주 루틴을 제공한다.
+
+## 주요 기능
+
+- 프로필 입력
+- Evidence 저장: 프로젝트, 수상, 자격증, 활동
+- Academic 저장: 과목명, 학점, 성적, 역량 매핑
+- 데모 공고 fallback
+- DEMO/LIVE 배지
+- 역량 기반 예상 적합도
+- 우선 보완 역량
+- Markdown Gap Analysis Report 복사
+- Supabase 기반 Profile/Evidence/Academic/Analysis History 구조
+
+## 실행 방법
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3100
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+접속:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```text
+http://127.0.0.1:3100
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 환경변수
 
-## Learn More
+`.env.local`:
 
-To learn more about Next.js, take a look at the following resources:
+```env
+NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+ALIO_OPEN_API_URL=your-jobalio-or-public-api-endpoint
+ALIO_OPEN_API_KEY=your-open-api-key
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+주의:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`는 클라이언트에서 사용 가능하다.
+- `SUPABASE_SERVICE_ROLE_KEY`는 클라이언트에 노출하면 안 된다.
+- 현재 MVP는 service role 없이 로그인 세션 기반 RLS 흐름을 우선한다.
 
-## Deploy on Vercel
+## Supabase
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+SQL 파일:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```text
+supabase/career_analysis.sql
+```
+
+포함 테이블:
+
+- `profiles`
+- `academic_records`
+- `evidence_records`
+- `career_analysis_history`
+
+## MVP 제외 범위
+
+- 범용 진로 추천 TOP3
+- 일반 취업 추천
+- PDF 자동 파싱
+- 자소서 생성
+- AI 면접
+- Q-Net API
+- HRD-Net API

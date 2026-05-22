@@ -159,7 +159,7 @@ def make_roadmap(gaps, activities):
 
 def write_markdown(profile, strengths, gap_result, activities, roadmap):
     lines = [
-        f"# {profile.get('name', '사용자')} 커리어 분석 결과",
+        f"# {profile.get('name', '사용자')} 공기업 전산직 Gap 분석 결과",
         "",
         "## 기본 정보",
         f"- 학과: {profile.get('major', '미입력')}",
@@ -184,14 +184,14 @@ def write_markdown(profile, strengths, gap_result, activities, roadmap):
 
     lines.extend([
         "",
-        "## 추천 활동",
+        "## 추천 학습 방향",
     ])
 
     lines.extend(f"{index}. {activity}" for index, activity in enumerate(activities, start=1))
 
     lines.extend([
         "",
-        "## 4주 로드맵",
+        "## 4주 공기업 전산직 준비 루틴",
     ])
 
     for item in roadmap:
@@ -207,7 +207,7 @@ def write_markdown(profile, strengths, gap_result, activities, roadmap):
 
 def write_output_markdown(profile, strengths, gap_result):
     lines = [
-        "# 핵심 분석 결과",
+        "# 공기업 전산직 Gap 분석 결과",
         "",
         "## 기본 정보",
         f"- 이름: {profile.get('name', '미입력')}",
@@ -219,7 +219,7 @@ def write_output_markdown(profile, strengths, gap_result):
     ]
 
     lines.extend(f"- {strength}" for strength in strengths)
-    lines.extend(["", "## 부족 역량"])
+    lines.extend(["", "## 우선 보완 역량"])
 
     gaps = gap_result["gaps"]
     if gaps:
@@ -240,17 +240,17 @@ def write_output_markdown(profile, strengths, gap_result):
 
 def write_user_guide_markdown(profile, activities, roadmap):
     lines = [
-        "# 사용자 실행 가이드",
+        "# 공기업 전산직 준비 실행 가이드",
         "",
         f"대상: {profile.get('name', '사용자')}",
         f"목표 진로: {profile.get('target_career', '미입력')}",
         "",
-        "## 추천 활동",
+        "## 추천 학습 방향",
     ]
 
     lines.extend(f"{index}. {activity}" for index, activity in enumerate(activities, start=1))
 
-    lines.extend(["", "## 4주 실행 로드맵"])
+    lines.extend(["", "## 4주 공기업 전산직 준비 루틴"])
     for item in roadmap:
         lines.extend([
             f"### Week {item['week']}",
@@ -267,12 +267,12 @@ def write_review_report(profile, gap_result, activities, roadmap):
         ("입력 파일을 읽었는가", bool(profile)),
         ("목표 진로가 있는가", bool(profile.get("target_career"))),
         ("부족 역량을 생성했는가", bool(gap_result["gaps"])),
-        ("추천 활동을 생성했는가", bool(activities)),
-        ("4주 로드맵을 생성했는가", len(roadmap) == 4),
+        ("추천 학습 방향을 생성했는가", bool(activities)),
+        ("4주 공기업 전산직 준비 루틴을 생성했는가", len(roadmap) == 4),
     ]
 
     lines = [
-        "# 검토 보고서",
+        "# Gap Analysis 검토 보고서",
         "",
         "## 점검 결과",
         "| 항목 | 결과 |",
@@ -286,12 +286,12 @@ def write_review_report(profile, gap_result, activities, roadmap):
     lines.extend([
         "",
         "## 구현 수준",
-        "- 기본형: 규칙 기반 함수 에이전트",
+        "- 기본형: 규칙 기반 Gap Analysis 함수 에이전트",
         "- 외부 API, LLM, Docker, LangGraph, RAG는 사용하지 않음",
         "",
         "## 현재 한계",
         "- 입력 데이터의 표현이 크게 바뀌면 키워드 기반 판단이 부정확할 수 있습니다.",
-        "- 목표 진로별 필요 역량은 현재 코드에 정의된 규칙에 의존합니다.",
+        "- 공기업 전산직 필요 역량은 현재 코드에 정의된 규칙에 의존합니다.",
         "- 관심 분야는 참고 정보이며 실제 보유 역량으로 바로 인정하지 않습니다.",
     ])
 

@@ -23,15 +23,15 @@ export function validateProfile(profile: UserProfile): ValidationResult {
   const gradeNumber = Number(profile.grade.trim());
 
   if (!profile.major.trim()) {
-    errors.major = "학과를 입력해주세요.";
+    errors.major = "학과를 입력해 주세요.";
   }
 
   if (!Number.isInteger(gradeNumber) || gradeNumber < 1 || gradeNumber > 4) {
-    errors.grade = "학년은 1~4 사이 숫자로 입력해주세요.";
+    errors.grade = "학년은 1~4 사이 숫자로 입력해 주세요.";
   }
 
   if (!profile.career.trim()) {
-    errors.career = "관심 진로를 입력해주세요.";
+    errors.career = "목표 진로를 입력해 주세요.";
   }
 
   return {
@@ -100,6 +100,76 @@ function isRoadmapWeek(value: unknown): value is CareerAnalysis["roadmap"][numbe
   );
 }
 
+function isJobPosting(
+  value: unknown,
+): value is CareerAnalysis["jobRecommendations"][number]["posting"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const posting = value as Record<string, unknown>;
+  return (
+    typeof posting.id === "string" &&
+    typeof posting.title === "string" &&
+    typeof posting.organization === "string" &&
+    typeof posting.source === "string" &&
+    (posting.sourceStatus === "DEMO" || posting.sourceStatus === "LIVE") &&
+    typeof posting.description === "string" &&
+    typeof posting.rawText === "string" &&
+    isStringArray(posting.requiredSkills) &&
+    isStringArray(posting.preferredCertificates)
+  );
+}
+
+function isExpectedProblem(
+  value: unknown,
+): value is CareerAnalysis["jobRecommendations"][number]["expectedProblems"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const problem = value as Record<string, unknown>;
+  return (
+    typeof problem.problem === "string" &&
+    typeof problem.impact === "string" &&
+    typeof problem.solution === "string"
+  );
+}
+
+function isJobRecommendation(
+  value: unknown,
+): value is CareerAnalysis["jobRecommendations"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const recommendation = value as Record<string, unknown>;
+  return (
+    isJobPosting(recommendation.posting) &&
+    isFiniteNumber(recommendation.fitScore) &&
+    isFiniteNumber(recommendation.estimatedPassRate) &&
+    isStringArray(recommendation.matchedSkills) &&
+    isStringArray(recommendation.missingSkills) &&
+    isStringArray(recommendation.recommendedCertificates) &&
+    isStringArray(recommendation.boostRoutine) &&
+    Array.isArray(recommendation.expectedProblems) &&
+    recommendation.expectedProblems.every(isExpectedProblem)
+  );
+}
+
+function isSystemRisk(value: unknown): value is CareerAnalysis["systemRisks"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const risk = value as Record<string, unknown>;
+  return (
+    typeof risk.risk === "string" &&
+    typeof risk.cause === "string" &&
+    typeof risk.mitigation === "string"
+  );
+}
+
 export function isCareerAnalysis(value: unknown): value is CareerAnalysis {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -112,11 +182,15 @@ export function isCareerAnalysis(value: unknown): value is CareerAnalysis {
     isScoreItems(analysis.scoreItems) &&
     Array.isArray(analysis.topCareers) &&
     analysis.topCareers.every(isTopCareer) &&
+    Array.isArray(analysis.jobRecommendations) &&
+    analysis.jobRecommendations.every(isJobRecommendation) &&
     Array.isArray(analysis.roadmap) &&
     analysis.roadmap.every(isRoadmapWeek) &&
     isStringArray(analysis.scoreReasons) &&
     isStringArray(analysis.strengths) &&
     isStringArray(analysis.gaps) &&
-    isStringArray(analysis.nextActions)
+    isStringArray(analysis.nextActions) &&
+    Array.isArray(analysis.systemRisks) &&
+    analysis.systemRisks.every(isSystemRisk)
   );
 }

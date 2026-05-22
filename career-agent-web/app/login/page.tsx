@@ -39,19 +39,22 @@ function LoginShell({ hasCallbackError }: { hasCallbackError: boolean }) {
     "idle",
   );
   const [errorMessage, setErrorMessage] = useState("");
+  const supabaseConfigured = isSupabaseConfigured();
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!email.trim()) return;
 
-    setStatus("loading");
-    setErrorMessage("");
-
-    if (!isSupabaseConfigured()) {
-      setErrorMessage("Supabase 환경변수가 설정되지 않아 로그인 기능을 사용할 수 없습니다.");
+    if (!supabaseConfigured) {
+      setErrorMessage(
+        "현재는 Supabase가 연결되지 않은 체험 모드입니다. 실제 로그인은 환경변수 설정 후 사용할 수 있습니다.",
+      );
       setStatus("error");
       return;
     }
+
+    setStatus("loading");
+    setErrorMessage("");
 
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOtp({
@@ -87,9 +90,26 @@ function LoginShell({ hasCallbackError }: { hasCallbackError: boolean }) {
           </Link>
           <h1 className="mt-4 text-2xl font-bold text-slate-950">로그인</h1>
           <p className="mt-2 text-sm text-slate-500">
-            이메일을 입력하면 로그인 링크를 보내드립니다.
+            Supabase가 연결되어 있으면 이메일 로그인 링크를 받을 수 있습니다.
           </p>
         </div>
+
+        {!supabaseConfigured && (
+          <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+            <p className="font-semibold">현재는 체험 모드입니다</p>
+            <p className="mt-1 leading-6">
+              `NEXT_PUBLIC_SUPABASE_URL`과 `NEXT_PUBLIC_SUPABASE_ANON_KEY`가
+              설정되지 않아 실제 이메일 로그인은 사용할 수 없습니다. 분석 기능은
+              로그인 없이 바로 사용할 수 있습니다.
+            </p>
+            <Link
+              href="/"
+              className="mt-3 inline-flex h-10 items-center rounded-md bg-amber-700 px-4 text-sm font-semibold text-white transition hover:bg-amber-800"
+            >
+              체험 분석 시작하기
+            </Link>
+          </div>
+        )}
 
         {hasCallbackError && (
           <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-600">
@@ -128,7 +148,7 @@ function LoginShell({ hasCallbackError }: { hasCallbackError: boolean }) {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="example@university.ac.kr"
                 required
-                disabled={status === "loading"}
+                disabled={status === "loading" || !supabaseConfigured}
                 className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50 disabled:text-slate-400"
               />
             </label>
@@ -141,10 +161,14 @@ function LoginShell({ hasCallbackError }: { hasCallbackError: boolean }) {
 
             <button
               type="submit"
-              disabled={status === "loading"}
+              disabled={status === "loading" || !supabaseConfigured}
               className="h-11 w-full rounded-md bg-emerald-700 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {status === "loading" ? "전송 중..." : "로그인 링크 받기"}
+              {!supabaseConfigured
+                ? "Supabase 설정 후 사용 가능"
+                : status === "loading"
+                  ? "전송 중..."
+                  : "로그인 링크 받기"}
             </button>
           </form>
         )}

@@ -2,167 +2,131 @@
 
 ## 프로젝트 목적
 
-Evidence-based Career Agent는 대학생의 수업, 성적, 프로젝트, 자격증, 활동 및 목표 진로를 기반으로 현재 부족한 역량을 분석하고, 부족한 역량을 채울 수 있는 추천 활동과 4주 실행 로드맵을 제공하는 AI Agent이다.
+Evidence-based Career Agent는 대학생의 전공, 성적, 프로젝트, 자격증, 활동 이력과 목표 진로를 기반으로 현재 부족 역량을 분석하고, 실행 가능한 보완 루틴과 4주 성장 로드맵을 제공하는 AI Career Agent이다.
 
-이 프로젝트는 수업용 일정공지 에이전트 구조를 기반으로 확장하며, 기존 프로젝트를 손상시키지 않는 방식으로 구현한다.
+현재 MVP는 공기업 전산직 준비생을 우선 대상으로 한다.
 
----
+## 현재 구현 상태
 
-## 프로젝트 원칙
+현재 구현은 `career-agent-web` Next.js 웹앱 기준이다.
 
-### 유지할 것
+구현 완료:
 
-- `schedule_agent.py`는 수정하지 않는다.
-- `sample_notices.txt`는 수정하지 않는다.
-- 기존 일정공지 에이전트 구조는 유지한다.
+- 프로필 입력 UI
+- 분석 API Route
+- 데모 공고 fallback
+- 공고 요구역량 기반 분석
+- 역량 기반 예상 적합도 계산
+- 추천 자격증 생성
+- 보완 루틴 생성
+- 4주 성장 로드맵 생성
+- 시스템 예상 문제점과 해결책 생성
+- Markdown 리포트 복사
 
-### 새로 추가할 것
+현재 공고 데이터 흐름:
 
-- `career_agent.py`
-- `sample_profile.json`
-- `context-career-agent.md`
-- `todo-career-agent.md`
+1. `/api/analyze-career`가 사용자 프로필을 받는다.
+2. `fetchJobPostings`가 공고 데이터를 조회한다.
+3. `ALIO_OPEN_API_URL`, `ALIO_OPEN_API_KEY`가 있으면 외부 API 호출을 시도한다.
+4. API 설정이 없거나 실패하면 데모 공고 fallback을 사용한다.
+5. `analyzeCareer`가 프로필과 공고 요구역량을 비교한다.
+6. 분석 결과를 UI와 Markdown 리포트로 출력한다.
 
----
+중요:
 
-## MVP v1 목표
+- 현재 공고는 실제 API 데이터가 아니라 데모 데이터이다.
+- 점수는 실제 합격률이 아니라 이력서 검증 전 역량 매칭 점수이다.
+- UI와 문서에서는 “역량 기반 예상 적합도”라고 표현한다.
 
-MVP v1은 Rule-based only로 구현한다.
+## 추가 개발 계획: Login 기반 Career DB + Evidence 저장
 
-목표 진로 후보를 여러 개 추천하지 않고, `sample_profile.json`에 입력된 목표 진로 하나를 기준으로 현재 상태와 필요한 역량의 차이를 분석한다.
+### 목표
 
-1. 사용자 프로필 읽기
-2. 수강 과목 및 성적 분석
-3. 프로젝트 및 활동 분석
-4. 목표 진로 하나 확인
-5. 부족 역량 분석
-6. 추천 활동 생성
-7. 4주 실행 로드맵 생성
+사용자 로그인 후 개인 Career DB를 생성하고, 수상/프로젝트/자격증/활동 이력을 Evidence로 저장한다.
 
-터미널 출력 항목:
+저장된 Evidence는 Career Agent 분석에 반영되어 공기업 전산직 요구역량과 매칭된다.
 
-1. 현재 강점
-2. 부족 역량
-3. 추천 활동
-4. 4주 로드맵
+### DB 테이블 방향
 
----
+1. profiles
+- id
+- user_id
+- name
+- university
+- major
+- grade
+- target_career
+- created_at
+- updated_at
 
-## 제외 기능 (v1)
+2. academic_records
+- id
+- user_id
+- course_name
+- credit
+- grade
+- semester
+- skill_mapping
+- created_at
 
-다음 기능은 MVP v1에서 구현하지 않는다.
+3. evidence_records
+- id
+- user_id
+- type
+- title
+- organization
+- description
+- role
+- result
+- skills
+- evidence_text
+- created_at
+- updated_at
 
-- LLM API 연동
-- API 키 사용
-- fallback 모드
-- 순수 LLM Prompting 기반 분석
-- RAG
-- VectorDB
-- LangGraph
-- Docker
-- Google Calendar API
-- 공모전 크롤링
-- 학교 공지 자동 수집
-- 팀원 추천
-- 자소서 자동 작성
-- 로그인 시스템
-- DB 저장 기능
+4. career_analysis_history
+- id
+- user_id
+- input_snapshot
+- result_snapshot
+- score
+- created_at
 
----
+### Evidence type
 
-## 에이전트 구조
+- award
+- project
+- certificate
+- hackathon
+- study
+- internship
+- activity
 
-### 1. Profile Analyzer
+### 기능 흐름
 
-역할:
+1. 사용자가 로그인한다.
+2. Career Profile을 입력한다.
+3. 성적표 PDF를 업로드한다.
+4. AI가 과목명, 학점, 성적을 추출한다.
+5. 사용자가 추출 결과를 확인/수정한다.
+6. 수상/프로젝트/자격증/활동을 Evidence로 추가한다.
+7. Agent가 Evidence를 기술역량으로 변환한다.
+8. 실제 공고 또는 데모 공고와 비교한다.
+9. 역량 기반 예상 적합도와 보완 루틴을 생성한다.
 
-사용자의 학업 및 활동 데이터를 분석한다.
+## 구현 시 주의사항
 
-입력:
+- 데모 공고는 실제 API 데이터처럼 보이지 않도록 UI에서 “데모 공고 - API 미연결”로 표시한다.
+- 실제 공고 API 연동 시 공고 원본 `rawText`를 저장해 매칭 근거를 추적한다.
+- 성적표 PDF 원본은 기본 저장하지 않고, 사용자가 확인한 추출 결과만 저장한다.
+- 개인정보 및 학업 정보 저장 전 명시적 동의 UI를 제공한다.
+- 분석 결과는 입력 스냅샷과 결과 스냅샷을 함께 저장해 재현 가능성을 확보한다.
 
-- 학과
-- 학년
-- 수업
-- 성적
-- 프로젝트
-- 자격증
-- 활동
-- 목표 진로
+## 향후 v2 방향
 
-출력:
-
-현재 역량 프로필
-
----
-
-### 2. Career Gap Analyzer
-
-역할:
-
-목표 진로에 필요한 역량과 현재 상태를 비교하여 부족한 역량을 도출한다.
-
-구현 방식:
-
-Rule-based only
-
-Rule-based:
-진로별 필요 역량 딕셔너리 기반으로 분석한다.
-
-예시:
-
-공기업 전산직:
-- DB
-- 보안
-- 네트워크
-- 시스템 운영
-- 협업 경험
-
-MVP v1에서는 LLM 설명을 사용하지 않는다.
-
----
-
-### 3. Roadmap Planner
-
-역할:
-
-부족 역량을 채우기 위한 4주 실행 계획을 생성한다.
-
-출력:
-
-실행 가능한 Markdown 로드맵
-
----
-
-## 실행 방식
-
-명령어:
-
-```bash
-python career_agent.py
-```
-
-프로그램 흐름:
-
-```text
-sample_profile.json 읽기
-↓
-Profile Analyzer
-↓
-Career Gap Analyzer
-↓
-Roadmap Planner
-↓
-현재 강점, 부족 역량, 추천 활동, 4주 로드맵 출력
-```
-
----
-
-## v2 확장 후보
-
-MVP v1이 안정적으로 동작한 뒤 아래 기능을 검토한다.
-
-- LLM API 연동
-- API 키 기반 설정
-- API 키가 없을 때 Rule-based fallback 실행
-- 부족 이유와 추천 활동에 대한 LLM 설명 생성
-- 목표 진로별 설명 문장 고도화
+- 실제 잡알리오/공공데이터 API 연동
+- API 실패 시 demo fallback 유지
+- LLM 설명문 생성과 rule-based fallback 병행
+- 성적표 PDF 분석
+- Evidence 기반 역량 매핑
+- 로그인 기반 개인 Career DB
+- 분석 이력 저장 및 이전 분석과 비교
