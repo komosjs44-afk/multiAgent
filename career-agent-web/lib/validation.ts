@@ -72,6 +72,23 @@ function isScoreItems(value: unknown): value is CareerAnalysis["scoreItems"] {
   );
 }
 
+function isScoreDetail(value: unknown): value is CareerAnalysis["scoreDetails"][number] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const detail = value as Record<string, unknown>;
+  return (
+    typeof detail.key === "string" &&
+    typeof detail.label === "string" &&
+    isFiniteNumber(detail.score) &&
+    isFiniteNumber(detail.maxScore) &&
+    (detail.status === "good" || detail.status === "watch" || detail.status === "needsWork") &&
+    typeof detail.reason === "string" &&
+    typeof detail.nextStep === "string"
+  );
+}
+
 function isTopCareer(value: unknown): value is CareerAnalysis["topCareers"][number] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -180,6 +197,8 @@ export function isCareerAnalysis(value: unknown): value is CareerAnalysis {
     typeof analysis.recommendedCareer === "string" &&
     isFiniteNumber(analysis.totalScore) &&
     isScoreItems(analysis.scoreItems) &&
+    Array.isArray(analysis.scoreDetails) &&
+    analysis.scoreDetails.every(isScoreDetail) &&
     Array.isArray(analysis.topCareers) &&
     analysis.topCareers.every(isTopCareer) &&
     Array.isArray(analysis.jobRecommendations) &&

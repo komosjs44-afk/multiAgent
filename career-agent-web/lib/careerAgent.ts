@@ -217,6 +217,105 @@ function getRecommendedProjects(missingSkills: string[]) {
     .slice(0, 3);
 }
 
+type ProjectEvidenceProfile = {
+  level: "none" | "idea" | "practice" | "deliverable" | "portfolio";
+  signals: string[];
+  matchedSkills: string[];
+  missingSignals: string[];
+  suggestedNext: string[];
+};
+
+const PROJECT_SIGNAL_RULES = [
+  {
+    signal: "구현 경험",
+    keywords: ["개발", "구현", "만들", "제작", "프로젝트", "서비스", "시스템", "api", "crud"],
+    skills: ["API", "DB"],
+    next: "기능 목록과 API 요청/응답 예시를 README에 정리합니다.",
+  },
+  {
+    signal: "DB/SQL 산출물",
+    keywords: ["db", "database", "sql", "erd", "테이블", "쿼리", "mysql", "postgres"],
+    skills: ["DB", "SQL"],
+    next: "ERD, 테이블 정의서, 핵심 조회/집계 SQL 5개를 산출물로 남깁니다.",
+  },
+  {
+    signal: "운영/Linux 산출물",
+    keywords: ["linux", "리눅스", "서버", "로그", "장애", "운영", "systemctl", "journalctl", "배포"],
+    skills: ["Linux", "시스템 운영", "로그 분석"],
+    next: "장애 상황 1개를 가정하고 원인 확인 명령어와 조치 보고서를 작성합니다.",
+  },
+  {
+    signal: "보안 산출물",
+    keywords: ["보안", "인증", "인가", "권한", "암호", "취약점", "jwt", "세션", "security"],
+    skills: ["보안"],
+    next: "인증/인가 흐름도와 권한별 접근 제어 테스트 결과를 정리합니다.",
+  },
+  {
+    signal: "네트워크 산출물",
+    keywords: ["네트워크", "tcp", "dns", "http", "패킷", "wireshark", "라우팅"],
+    skills: ["네트워크"],
+    next: "HTTP 요청 흐름과 DNS/TCP 연결 과정을 캡처해 1페이지 리포트로 만듭니다.",
+  },
+  {
+    signal: "문서화 산출물",
+    keywords: ["readme", "문서", "보고서", "발표", "명세", "회고", "포트폴리오"],
+    skills: ["문서화"],
+    next: "문제 상황, 역할, 사용 기술, 결과, 공고 요구역량 매핑을 한 페이지로 정리합니다.",
+  },
+];
+
+function analyzeProjectEvidence(projectsText: string): ProjectEvidenceProfile {
+  if (!projectsText.trim()) {
+    return {
+      level: "none",
+      signals: [],
+      matchedSkills: [],
+      missingSignals: PROJECT_SIGNAL_RULES.map((rule) => rule.signal),
+      suggestedNext: [
+        "공공기관 업무 시나리오를 정하고 DB/API 미니 프로젝트 주제를 하나 선택합니다.",
+      ],
+    };
+  }
+
+  const matchedRules = PROJECT_SIGNAL_RULES.filter((rule) =>
+    includesAny(projectsText, rule.keywords),
+  );
+  const signals = matchedRules.map((rule) => rule.signal);
+  const matchedSkills = prioritizeSkills(matchedRules.flatMap((rule) => rule.skills));
+  const missingRules = PROJECT_SIGNAL_RULES.filter((rule) => !signals.includes(rule.signal));
+  const suggestedNext = missingRules.slice(0, 3).map((rule) => rule.next);
+  const hasImplementation = signals.includes("구현 경험");
+  const hasDocument = signals.includes("문서화 산출물");
+  const hasTwoTechnicalSignals = signals.filter((signal) => signal !== "문서화 산출물").length >= 2;
+  const level: ProjectEvidenceProfile["level"] =
+    hasImplementation && hasDocument && hasTwoTechnicalSignals
+      ? "portfolio"
+      : hasImplementation && hasTwoTechnicalSignals
+        ? "deliverable"
+        : signals.length >= 2
+          ? "practice"
+          : "idea";
+
+  return {
+    level,
+    signals,
+    matchedSkills,
+    missingSignals: missingRules.map((rule) => rule.signal),
+    suggestedNext: suggestedNext.length ? suggestedNext : ["현재 산출물을 공고 요구역량과 1:1로 매핑해 지원 전략표로 정리합니다."],
+  };
+}
+
+function getProjectLevelLabel(level: ProjectEvidenceProfile["level"]) {
+  const labels = {
+    none: "프로젝트 미입력",
+    idea: "아이디어/발표 단계",
+    practice: "실습 근거 단계",
+    deliverable: "구현 산출물 단계",
+    portfolio: "포트폴리오 정리 단계",
+  };
+  return labels[level];
+}
+
 function makeTopCareers(
   targetCareer: string,
   evidenceText: string,
@@ -252,42 +351,56 @@ function makeTopCareers(
     .slice(0, 3);
 }
 
-function makeRoadmap(missingSkills: string[]): CareerAnalysis["roadmap"] {
+function makeRoadmap(
+  missingSkills: string[],
+  projectEvidence: ProjectEvidenceProfile,
+): CareerAnalysis["roadmap"] {
   const focus = missingSkills.length
     ? prioritizeSkills(missingSkills)
     : ["공고 요구역량 비교", "운영/보안 실습", "DB/시스템 산출물", "지원 전략 정리"];
   const projects = getRecommendedProjects(focus);
+  const projectLevel = getProjectLevelLabel(projectEvidence.level);
+  const projectNext = projectEvidence.suggestedNext;
+  const projectSignals = projectEvidence.signals.length
+    ? projectEvidence.signals.join(", ")
+    : "아직 명확한 프로젝트 산출물 없음";
 
   return [
     {
       week: 1,
       title: "공고 요구역량 정리",
       actions: [
-        "잡알리오 또는 데모 공고 3개를 골라 공기업 전산직 요구역량 표를 작성합니다.",
+        "알리오 OpenAPI 공고 3개를 골라 공기업 전산직 요구역량 표를 작성합니다.",
         `${focus[0]} 항목을 현재 Evidence와 비교해 부족 근거를 3줄로 정리합니다.`,
       ],
     },
     {
       week: 2,
-      title: "운영/보안 실습",
+      title: projectEvidence.level === "none" || projectEvidence.level === "idea"
+        ? "프로젝트 산출물 시작"
+        : "운영/보안 실습 보강",
       actions: [
-        `${focus[1] ?? "보안"} 보완을 위해 로그, 권한, 네트워크 흐름 중 하나를 실습합니다.`,
-        "캡처 화면, 명령어, 오류 원인, 조치 내용을 1페이지 운영 보고서로 남깁니다.",
+        projectNext[0] ?? `${focus[1] ?? "보안"} 보완을 위해 로그, 권한, 네트워크 흐름 중 하나를 실습합니다.`,
+        `현재 프로젝트 단계(${projectLevel})에서 확인된 근거(${projectSignals})를 README 초안에 반영합니다.`,
       ],
     },
     {
       week: 3,
-      title: "DB/시스템 산출물",
+      title: projectEvidence.level === "portfolio"
+        ? "공고별 포트폴리오 매핑"
+        : "DB/시스템 산출물",
       actions: [
-        projects[0] ?? "공공기관 업무 시나리오 기반 DB/API 미니 산출물을 작성합니다.",
-        `${focus[2] ?? "문서화"} 역량을 보여줄 수 있도록 README와 결과 보고서를 정리합니다.`,
+        projectNext[1] ?? projects[0] ?? "공공기관 업무 시나리오 기반 DB/API 미니 산출물을 작성합니다.",
+        projectEvidence.level === "portfolio"
+          ? "완성된 산출물을 알리오 공고 요구역량, 우대조건, NCS 항목과 1:1로 연결합니다."
+          : `${focus[2] ?? "문서화"} 역량을 보여줄 수 있도록 README와 결과 보고서를 정리합니다.`,
       ],
     },
     {
       week: 4,
       title: "Gap 분석 리포트 정리",
       actions: [
-        "강점, 부족 역량, 보완 활동, 공고별 매칭 근거를 Markdown 리포트로 정리합니다.",
+        projectNext[2] ?? "강점, 부족 역량, 보완 활동, 공고별 매칭 근거를 Markdown 리포트로 정리합니다.",
         "정보처리기사, SQLD, 정보보안기사 등 필요한 자격증을 필수/우대/보완으로 구분합니다.",
       ],
     },
@@ -416,12 +529,168 @@ function makeSystemRisks(): CareerAnalysis["systemRisks"] {
   ];
 }
 
+function getScoreStatus(score: number, maxScore: number): CareerAnalysis["scoreDetails"][number]["status"] {
+  const ratio = maxScore ? score / maxScore : 0;
+  if (ratio >= 0.75) {
+    return "good";
+  }
+  if (ratio >= 0.45) {
+    return "watch";
+  }
+  return "needsWork";
+}
+
+function formatEvidenceList(items: string[]) {
+  return items.length ? items.join(", ") : "없음";
+}
+
+function getTechStackNextStep(score: number, missingSkills: string[]) {
+  if (score >= 20) {
+    return "현재 기술 스택을 공고별 주요 업무, 우대조건, 프로젝트 산출물과 1:1로 연결해 지원 근거표를 만드세요.";
+  }
+
+  if (missingSkills.length > 0) {
+    return `${missingSkills.slice(0, 2).join(", ")} 기술을 실습 기록으로 추가하면 기술 스택 점수가 올라갑니다.`;
+  }
+
+  return "보유 기술을 단순 키워드가 아니라 사용 맥락, 산출물, 결과와 함께 적어주세요.";
+}
+
+function getProjectScoreReason(projectEvidence: ProjectEvidenceProfile, score: number) {
+  const signals = formatEvidenceList(projectEvidence.signals);
+  const missing = formatEvidenceList(projectEvidence.missingSignals.slice(0, 3));
+  return `프로젝트 입력은 ${getProjectLevelLabel(projectEvidence.level)}로 판정되어 ${score}점을 반영했습니다. 확인된 산출물 신호: ${signals}. 다음 상승 조건: ${missing}.`;
+}
+
+function getProjectNextStep(projectEvidence: ProjectEvidenceProfile) {
+  if (projectEvidence.level === "portfolio") {
+    return "이미 포트폴리오 단계라서 공고별 요구역량, 우대 자격, 주요 업무와 프로젝트 근거를 1:1로 매핑하세요.";
+  }
+
+  return projectEvidence.suggestedNext[0] ?? "프로젝트 산출물을 README와 결과 보고서로 정리하세요.";
+}
+
+function makeScoreDetails({
+  scoreItems,
+  skillList,
+  projectEvidence,
+  targetMatchedSkills,
+  targetMissingSkills,
+  certificatesText,
+  careerText,
+  majorFit,
+  activityKeywords,
+}: {
+  scoreItems: CareerAnalysis["scoreItems"];
+  skillList: string[];
+  projectEvidence: ProjectEvidenceProfile;
+  targetMatchedSkills: string[];
+  targetMissingSkills: string[];
+  certificatesText: string;
+  careerText: string;
+  majorFit: number;
+  activityKeywords: string[];
+}): CareerAnalysis["scoreDetails"] {
+  const items: Array<{
+    key: keyof CareerAnalysis["scoreItems"];
+    label: string;
+    maxScore: number;
+    reason: string;
+    nextStep: string;
+  }> = [
+    {
+      key: "majorFit",
+      label: "전공 적합도",
+      maxScore: 20,
+      reason:
+        majorFit >= 20
+          ? "학과명이 IT/전산 계열과 직접 연결되어 20점을 반영했습니다."
+          : "전공명만으로는 전산직 연결성이 약해 10점을 반영했습니다.",
+      nextStep:
+        majorFit >= 20
+          ? "전공 과목 중 DB, 운영체제, 네트워크, 보안 과목 성적이나 과제 산출물을 추가하면 근거가 더 단단해집니다."
+          : "전공 외 IT 과목, 부트캠프, 프로젝트, 자격증 근거를 추가해 전산직 연결성을 보완하세요.",
+    },
+    {
+      key: "techStack",
+      label: "기술 스택",
+      maxScore: 20,
+      reason: `보유 기술 ${skillList.length}개를 5점 단위로 계산하고, 공고 요구역량 매칭(${formatEvidenceList(targetMatchedSkills)})을 함께 확인했습니다.`,
+      nextStep: getTechStackNextStep(scoreItems.techStack, targetMissingSkills),
+    },
+    {
+      key: "projectExperience",
+      label: "프로젝트 경험",
+      maxScore: 20,
+      reason: getProjectScoreReason(projectEvidence, scoreItems.projectExperience),
+      nextStep: getProjectNextStep(projectEvidence),
+    },
+    {
+      key: "contestExperience",
+      label: "공모전/대외활동",
+      maxScore: 10,
+      reason:
+        scoreItems.contestExperience > 0
+          ? `입력 내용에서 ${activityKeywords.join(", ")} 키워드가 확인되어 10점을 반영했습니다.`
+          : "공모전/해커톤/대회 키워드가 확인되지 않아 0점입니다.",
+      nextStep:
+        scoreItems.contestExperience > 0
+          ? "수상 여부보다 문제 정의, 맡은 역할, 해결 과정, 결과 지표를 4줄로 정리해 Evidence 품질을 높이세요."
+          : "팀 프로젝트 회고, 발표자료, 문제 해결 과정도 대외활동 대체 Evidence로 정리할 수 있습니다.",
+    },
+    {
+      key: "certificates",
+      label: "자격증",
+      maxScore: 10,
+      reason: certificatesText
+        ? `자격증/시험 준비 입력을 확인해 ${scoreItems.certificates}점을 반영했습니다. 입력 내용: ${certificatesText}`
+        : "자격증 또는 시험 준비 입력이 없어 0점입니다.",
+      nextStep:
+        scoreItems.certificates >= 10
+          ? "이미 자격증 근거가 있으니 각 자격증을 DB, 운영체제, NCS, 사무역량 중 어떤 요구조건과 연결할지 정리하세요."
+          : "정보처리기사, SQLD, 네트워크관리사, 리눅스마스터 중 현재 부족 역량과 연결되는 항목을 우선 정리하세요.",
+    },
+    {
+      key: "careerClarity",
+      label: "진로 명확도",
+      maxScore: 10,
+      reason: careerText
+        ? `목표 진로가 '${careerText}'로 입력되어 알리오 공고 검색과 Gap 분석 기준으로 사용됐습니다.`
+        : "목표 진로가 비어 있으면 공고 기반 분석 기준이 흐려집니다.",
+      nextStep:
+        careerText
+          ? "목표 직무 안에서 시스템 운영, 정보보안, DB/데이터, 행정시스템 개발 중 1순위를 정하면 추천 공고와 로드맵이 더 좁혀집니다."
+          : "목표를 '공기업 전산직', '정보보안 담당', '시스템 운영'처럼 직무 단위로 적어주세요.",
+    },
+    {
+      key: "actionability",
+      label: "실행 가능성",
+      maxScore: 10,
+      reason: `기술 입력, 프로젝트 산출물 단계(${getProjectLevelLabel(projectEvidence.level)}), 자격증 입력, 남은 부족 역량 ${targetMissingSkills.length}개를 기준으로 ${scoreItems.actionability}점을 반영했습니다.`,
+      nextStep:
+        projectEvidence.level === "portfolio"
+          ? "이미 정리된 산출물을 알리오 공고별 요구역량과 1:1로 매핑하세요."
+          : "이번 주에 만들 산출물 1개를 정하고 캡처, 명령어, 결과 문서까지 남기세요.",
+    },
+  ];
+
+  return items.map((item) => {
+    const score = scoreItems[item.key];
+    return {
+      ...item,
+      score,
+      status: getScoreStatus(score, item.maxScore),
+    };
+  });
+}
+
 export function analyzeCareer(
   profile: UserProfile,
   postings: JobPosting[] = [],
 ): CareerAnalysis {
   const skillList = parseSkills(profile.skills);
   const projectsText = profile.projects.trim();
+  const projectEvidence = analyzeProjectEvidence(projectsText);
   const certificatesText = profile.certificates.trim();
   const careerText = profile.career.trim();
   const evidenceText = getEvidenceText(profile, skillList);
@@ -451,30 +720,41 @@ export function analyzeCareer(
     gaps.push("공기업 전산직 핵심 기술 스택 확장 필요");
   }
 
-  const projectExperience = clampScore(
-    projectsText ? 12 + Math.min(projectsText.length, 80) / 10 : 0,
-    20,
-  );
+  const projectExperienceBase = {
+    none: 0,
+    idea: 8,
+    practice: 12,
+    deliverable: 17,
+    portfolio: 20,
+  }[projectEvidence.level];
+  const projectExperience = clampScore(projectExperienceBase, 20);
   scoreReasons.push(
     projectsText
-      ? "프로젝트 경험이 있어 공고 요구역량을 산출물 기반으로 설명할 수 있습니다."
+      ? `프로젝트 Evidence가 ${getProjectLevelLabel(projectEvidence.level)}로 확인되어 산출물 완성도 기준으로 점수를 산정했습니다.`
       : "프로젝트 경험 입력이 없어 공고 요구역량을 입증할 산출물 근거가 약합니다.",
   );
   if (projectsText) {
-    strengths.push("프로젝트 경험을 공기업 전산직 Evidence로 전환할 수 있습니다.");
+    strengths.push(`프로젝트 경험이 ${getProjectLevelLabel(projectEvidence.level)}까지 정리되어 있습니다.`);
+    if (projectEvidence.signals.length) {
+      strengths.push(`프로젝트 근거에서 ${projectEvidence.signals.join(", ")} 신호가 확인됩니다.`);
+    }
+    if (projectEvidence.matchedSkills.length) {
+      strengths.push(`프로젝트가 ${projectEvidence.matchedSkills.join(", ")} 역량 근거로 연결됩니다.`);
+    }
   } else {
     gaps.push("DB/API/운영 실습 기반 프로젝트 Evidence 부족");
   }
 
-  const contestExperience = includesAny(evidenceText, ["공모전", "해커톤", "대회", "contest"])
-    ? 10
-    : 0;
+  const activityKeywords = ["공모전", "해커톤", "대회", "contest"].filter((keyword) =>
+    includesAny(evidenceText, [keyword]),
+  );
+  const contestExperience = activityKeywords.length ? 10 : 0;
   scoreReasons.push(
     contestExperience
       ? "공모전 또는 대회 경험이 확인되어 문제 해결 경험 점수에 반영했습니다."
       : "공모전 또는 대회 경험 입력이 없어 해당 점수는 낮게 산정했습니다.",
   );
-  if (!contestExperience) {
+  if (!contestExperience && projectEvidence.level !== "deliverable" && projectEvidence.level !== "portfolio") {
     gaps.push("문제 해결 또는 협업 활동 Evidence 부족");
   }
 
@@ -502,6 +782,7 @@ export function analyzeCareer(
     skillList.length >= 2,
     certificatesText.length > 0,
     targetMissingSkills.length <= 3,
+    projectEvidence.level === "deliverable" || projectEvidence.level === "portfolio",
   ].filter(Boolean).length;
   const actionability = clampScore(2 + actionabilitySignals * 2, 10);
   scoreReasons.push(
@@ -521,6 +802,11 @@ export function analyzeCareer(
       (skill, index) => `우선순위 ${index + 1}: ${skill} 보완 필요 - ${LEARNING_BY_SKILL[skill] ?? "관련 Evidence를 추가해야 합니다."}`,
     ),
   );
+  if (projectEvidence.level !== "portfolio" && projectEvidence.missingSignals.length) {
+    gaps.push(
+      `프로젝트 산출물 보완 필요: ${projectEvidence.missingSignals.slice(0, 3).join(", ")} 근거를 추가하면 강점과 로드맵이 갱신됩니다.`,
+    );
+  }
 
   const priorityGaps = targetMissingSkills.slice(0, 3);
   const recommendedCertificates = getRecommendedCertificates(
@@ -532,6 +818,7 @@ export function analyzeCareer(
   nextActions.push(
     "공기업 전산직 공고 3개를 골라 요구역량, 우대 자격, 주요 업무를 표로 비교합니다.",
     ...priorityGaps.map((skill, index) => `우선순위 ${index + 1} 보완 역량(${skill})을 1주 단위 학습 루틴에 반영합니다.`),
+    ...projectEvidence.suggestedNext.map((action) => `프로젝트 성장 액션: ${action}`),
     ...recommendedCertificates.map((certificate) => `추천 자격증/검증 항목: ${certificate}`),
     ...recommendedProjects.map((project) => `추천 프로젝트: ${project}`),
     "Markdown 리포트에는 강점, 부족 역량, 보완 루틴, 공고별 매칭 근거를 함께 정리합니다.",
@@ -547,6 +834,17 @@ export function analyzeCareer(
     actionability,
   };
   const totalScore = Object.values(scoreItems).reduce((sum, score) => sum + score, 0);
+  const scoreDetails = makeScoreDetails({
+    scoreItems,
+    skillList,
+    projectEvidence,
+    targetMatchedSkills,
+    targetMissingSkills,
+    certificatesText,
+    careerText,
+    majorFit,
+    activityKeywords,
+  });
   const topCareers = makeTopCareers(careerText, evidenceText, totalScore);
   const jobRecommendations = recommendJobs(profile, postings);
 
@@ -554,9 +852,10 @@ export function analyzeCareer(
     recommendedCareer: "공기업 전산직 Gap Analysis",
     totalScore,
     scoreItems,
+    scoreDetails,
     topCareers,
     jobRecommendations,
-    roadmap: makeRoadmap(targetMissingSkills),
+    roadmap: makeRoadmap(targetMissingSkills, projectEvidence),
     scoreReasons,
     strengths: strengths.length
       ? unique(strengths)

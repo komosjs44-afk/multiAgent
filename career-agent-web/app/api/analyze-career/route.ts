@@ -1,14 +1,102 @@
 import { NextResponse } from "next/server";
 
 import { analyzeCareer } from "@/lib/careerAgent";
-import { fetchJobPostings } from "@/lib/jobPostings";
+import { fetchJobPostings } from "../../../lib/jobPostings";
 import {
   createClient,
   getAcademicRecords,
   getEvidenceRecords,
 } from "@/lib/supabase/server";
 import { isUserProfile, validateProfile } from "@/lib/validation";
-import type { AcademicRecord, EvidenceRecord, UserProfile } from "@/types/career";
+import type { AcademicRecord, EvidenceRecord, JobPosting, UserProfile } from "@/types/career";
+
+async function generateOpenAISummary(
+  profile: UserProfile,
+  analysis: ReturnType<typeof analyzeCareer>,
+  postings: JobPosting[],
+): Promise<string | undefined> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return undefined;
+  }
+
+  const model = process.env.OPENAI_MODEL ?? "gpt-5-mini";
+  const profileSummary = [
+    `학과: ${profile.major}`,
+    `학년: ${profile.grade}`,
+    `목표 진로: ${profile.career}`,
+    `보유 기술: ${profile.skills}`,
+    `프로젝트: ${profile.projects}`,
+    `자격증/시험 준비: ${profile.certificates}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const topCareersSummary = analysis.topCareers
+    .map(
+      (career) =>
+        `- ${career.name}: ${career.reason} (부족 역량: ${career.missingSkills.join(", ")})`,
+    )
+    .join("\n");
+
+  const prompt = `당신은 공기업 전산직 취업 준비생을 도와주는 커리어 코치입니다.
+입력된 프로필과 분석 결과를 바탕으로, 아래 항목을 한국어로 간결하고 실행 가능한 요약문으로 작성하세요.
+
+프로필:
+${profileSummary}
+
+총점: ${analysis.totalScore} / 100
+
+강점:
+${analysis.strengths.map((item) => `- ${item}`).join("\n")}
+
+부족 역량:
+${analysis.gaps.map((item) => `- ${item}`).join("\n")}
+
+추천 학습 방향:
+${analysis.nextActions.map((item) => `- ${item}`).join("\n")}
+
+4주 루틴:
+${analysis.roadmap
+      .map((week) => `Week ${week.week}: ${week.title} (${week.actions.join("; ")})`)
+      .join("\n")}
+
+공고 요약:
+${topCareersSummary}
+
+요약문을 세 문단으로 구성하고, 특히 "지금 당장 해야 할 일", "보완할 핵심 역량", "지원 공고 대비 준비 우선순위"를 명확히 설명하세요.`;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: "당신은 한국 공기업 전산직 취업 준비생을 돕는 커리어 컨설턴트입니다.",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 500,
+      }),
+    });
+
+    const payload = await response.json();
+    const summary = payload?.choices?.[0]?.message?.content;
+    return typeof summary === "string" ? summary.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function mergeUniqueText(left: string, rightItems: string[]) {
   const existing = left
@@ -111,8 +199,13 @@ export async function POST(request: Request) {
       savedData.academic,
     );
     const postings = await fetchJobPostings(enrichedProfile);
+    const analysis = analyzeCareer(enrichedProfile, postings);
+    const aiSummary = await generateOpenAISummary(enrichedProfile, analysis, postings);
 
-    return NextResponse.json(analyzeCareer(enrichedProfile, postings));
+    return NextResponse.json({
+      ...analysis,
+      aiSummary,
+    });
   } catch {
     return NextResponse.json(
       { error: "Failed to analyze career profile" },

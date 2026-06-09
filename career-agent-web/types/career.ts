@@ -98,6 +98,15 @@ export type CareerAnalysis = {
     careerClarity: number;
     actionability: number;
   };
+  scoreDetails: Array<{
+    key: keyof CareerAnalysis["scoreItems"];
+    label: string;
+    score: number;
+    maxScore: number;
+    status: "good" | "watch" | "needsWork";
+    reason: string;
+    nextStep: string;
+  }>;
   topCareers: Array<{
     name: string;
     fitScore: number;
@@ -111,6 +120,7 @@ export type CareerAnalysis = {
     title: string;
     actions: string[];
   }>;
+  aiSummary?: string;
   scoreReasons: string[];
   strengths: string[];
   gaps: string[];

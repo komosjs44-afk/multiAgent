@@ -15,6 +15,11 @@ import type {
   UserProfile,
 } from "@/types/career";
 
+type RoadmapChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 const initialProfile: UserProfile = {
   major: "",
   grade: "",
@@ -338,10 +343,14 @@ export default function Home() {
 
             {result ? (
               <div className="grid gap-4">
+                {result.aiSummary ? (
+                  <AISummaryCard summary={result.aiSummary} />
+                ) : null}
+                <RoadmapChatPanel profile={profile} analysis={result} />
                 <TotalScoreCard score={result.totalScore} />
                 <JobRecommendationList recommendations={result.jobRecommendations} />
                 <TopCareerList careers={result.topCareers} />
-                <ScoreBreakdown scoreItems={result.scoreItems} />
+                <ScoreBreakdown scoreDetails={result.scoreDetails} />
                 <ResultList label="강점" items={result.strengths} tone="good" />
                 <ResultList label="부족 역량" items={result.gaps} tone="warn" />
                 <ActionChecklist items={result.nextActions} />
@@ -900,6 +909,172 @@ function EmptyResult() {
   );
 }
 
+function RoadmapChatPanel({
+  profile,
+  analysis,
+}: {
+  profile: UserProfile;
+  analysis: CareerAnalysis;
+}) {
+  const [messages, setMessages] = useState<RoadmapChatMessage[]>([
+    {
+      role: "assistant",
+      content:
+        "분석 결과를 바탕으로 로드맵을 상담해드릴게요. 어떤 역량부터 준비할지, 이번 주에 무엇을 만들지 물어보세요.",
+    },
+  ]);
+  const [question, setQuestion] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState("");
+
+  const suggestions = [
+    "이번 주에 뭘 먼저 해야 해?",
+    "내 부족 역량 중 우선순위 정해줘",
+    "공기업 전산직 포트폴리오 주제 추천해줘",
+  ];
+
+  async function sendQuestion(nextQuestion = question) {
+    const cleanQuestion = nextQuestion.trim();
+    if (!cleanQuestion || isSending) {
+      return;
+    }
+
+    const nextMessages: RoadmapChatMessage[] = [
+      ...messages,
+      { role: "user", content: cleanQuestion },
+    ];
+    setMessages(nextMessages);
+    setQuestion("");
+    setError("");
+    setIsSending(true);
+
+    try {
+      const response = await fetch("/api/roadmap-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: cleanQuestion,
+          profile,
+          analysis,
+          messages,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorPayload = (await response.json().catch(() => null)) as {
+          detail?: string;
+          error?: string;
+        } | null;
+        throw new Error(errorPayload?.detail || errorPayload?.error || "request_failed");
+      }
+
+      const payload = (await response.json()) as { answer?: string };
+      setMessages([
+        ...nextMessages,
+        {
+          role: "assistant",
+          content:
+            payload.answer ??
+            "답변을 만들지 못했습니다. 로드맵의 부족 역량과 다음 액션을 기준으로 다시 질문해 주세요.",
+        },
+      ]);
+    } catch {
+      setError("로드맵 상담 답변을 가져오지 못했습니다.");
+      setMessages([
+        ...nextMessages,
+        {
+          role: "assistant",
+          content:
+            "지금은 기본 상담으로 안내할게요. 가장 먼저 추천 공고의 보완 역량 1개를 고르고, 1주 안에 README나 1페이지 보고서로 남길 수 있는 작은 산출물을 만드세요.",
+        },
+      ]);
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4">
+      <div className="flex flex-col gap-1">
+        <p className="text-sm font-semibold text-emerald-800">
+          로드맵 상담 챗봇
+        </p>
+        <p className="text-sm leading-6 text-emerald-900">
+          알리오 공고 분석 결과와 4주 로드맵을 기준으로 다음 행동을 상담합니다.
+        </p>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {suggestions.map((item) => (
+          <button
+            key={item}
+            type="button"
+            onClick={() => sendQuestion(item)}
+            disabled={isSending}
+            className="rounded-md border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4 grid max-h-80 gap-3 overflow-y-auto pr-1">
+        {messages.map((message, index) => (
+          <div
+            key={`${message.role}-${index}`}
+            className={`rounded-md p-3 text-sm leading-6 ${
+              message.role === "user"
+                ? "ml-8 bg-emerald-700 text-white"
+                : "mr-8 bg-white text-slate-800"
+            }`}
+          >
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          </div>
+        ))}
+      </div>
+
+      {error ? (
+        <p className="mt-3 text-sm font-medium text-red-600">{error}</p>
+      ) : null}
+
+      <div className="mt-4 flex gap-2">
+        <input
+          type="text"
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              sendQuestion();
+            }
+          }}
+          placeholder="예: 2주차 로드맵을 더 구체적으로 짜줘"
+          className="min-w-0 flex-1 rounded-md border border-emerald-200 bg-white px-3 text-sm text-slate-950 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
+        />
+        <button
+          type="button"
+          onClick={() => sendQuestion()}
+          disabled={!question.trim() || isSending}
+          className="h-10 rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          {isSending ? "상담 중" : "전송"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AISummaryCard({ summary }: { summary: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-700">AI 종합 요약</p>
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+        {summary}
+      </p>
+    </div>
+  );
+}
+
 function TotalScoreCard({ score }: { score: number }) {
   return (
     <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-4">
@@ -1042,35 +1217,61 @@ function TopCareerList({
 }
 
 function ScoreBreakdown({
-  scoreItems,
+  scoreDetails,
 }: {
-  scoreItems: CareerAnalysis["scoreItems"];
+  scoreDetails: CareerAnalysis["scoreDetails"];
 }) {
-  const items = [
-    ["전공 적합도", scoreItems.majorFit, 20],
-    ["기술 스택", scoreItems.techStack, 20],
-    ["프로젝트 경험", scoreItems.projectExperience, 20],
-    ["공모전/대외활동", scoreItems.contestExperience, 10],
-    ["자격증", scoreItems.certificates, 10],
-    ["진로 명확도", scoreItems.careerClarity, 10],
-    ["실행 가능성", scoreItems.actionability, 10],
-  ] as const;
+  const statusClass = {
+    good: "bg-emerald-100 text-emerald-700",
+    watch: "bg-amber-100 text-amber-700",
+    needsWork: "bg-red-100 text-red-700",
+  };
+  const statusLabel = {
+    good: "좋음",
+    watch: "보완",
+    needsWork: "주의",
+  };
 
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
       <p className="text-sm font-semibold text-slate-500">항목별 점수</p>
-      <dl className="mt-3 grid gap-3 sm:grid-cols-2">
-        {items.map(([label, score, maxScore]) => (
-          <div key={label} className="rounded-md bg-white p-3">
-            <div className="flex items-center justify-between gap-4 text-sm">
-              <dt className="font-medium text-slate-600">{label}</dt>
-              <dd className="font-semibold text-slate-950">
-                {score} / {maxScore}
-              </dd>
-            </div>
-          </div>
-        ))}
-      </dl>
+      <div className="mt-3 grid gap-3">
+        {scoreDetails.map((item) => {
+          const percent = item.maxScore ? Math.round((item.score / item.maxScore) * 100) : 0;
+
+          return (
+            <section key={item.key} className="rounded-md bg-white p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      {item.label}
+                    </h3>
+                    <span className={`rounded-full px-2 py-1 text-xs font-bold ${statusClass[item.status]}`}>
+                      {statusLabel[item.status]}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    {item.reason}
+                  </p>
+                </div>
+                <p className="shrink-0 text-lg font-bold text-slate-950">
+                  {item.score} / {item.maxScore}
+                </p>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-emerald-700"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+              <p className="mt-2 text-sm leading-6 text-emerald-800">
+                보완 팁: {item.nextStep}
+              </p>
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }

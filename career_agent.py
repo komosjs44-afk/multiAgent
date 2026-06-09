@@ -1,11 +1,19 @@
 import json
+import os
 from pathlib import Path
+
+try:
+    import openai
+except ImportError:
+    openai = None
 
 
 SAMPLE_PROFILE_PATH = Path(__file__).parent / "sample_profile.json"
 OUTPUT_PATH = Path(__file__).parent / "output.md"
 USER_GUIDE_PATH = Path(__file__).parent / "output_user_guide.md"
 REVIEW_REPORT_PATH = Path(__file__).parent / "review_report.md"
+ENV_PATH = Path(__file__).parent / ".env"
+OPENAI_MODEL_DEFAULT = "gpt-5-mini"
 
 
 CAREER_REQUIRED_SKILLS = {
@@ -82,6 +90,75 @@ def get_required_skills(target_career):
         target_career,
         ["전공 기초", "프로젝트 경험", "협업 경험", "문제 해결", "포트폴리오"],
     )
+
+
+def load_env():
+    if not ENV_PATH.exists():
+        return
+
+    with open(ENV_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and value and key not in os.environ:
+                os.environ[key] = value
+
+    if openai is not None:
+        openai.api_key = os.environ.get("OPENAI_API_KEY")
+
+
+def review_guides_with_rules(guides):
+    lines = [
+        "## 규칙 기반 검토 결과",
+        "- 안내문을 입력 자료 기준으로 썼는지 확인하세요.",
+        "- 핵심 정보가 빠졌거나 대상이 불분명한 표현이 있는지 확인하세요.",
+        "- '반드시', '무조건', '항상' 같은 단정 표현이 있는지 확인하세요.",
+        "- 사용자가 어떤 행동을 해야 하는지 명확히 제시했는지 확인하세요.",
+    ]
+
+    if "추천" not in guides and "실행" not in guides:
+        lines.append("- 안내문에 추천 또는 실행 과제가 충분히 드러나는지 검토하세요.")
+
+    return "\n".join(lines)
+
+
+def review_guides_with_openai(guides):
+    if openai is None or not os.environ.get("OPENAI_API_KEY"):
+        return review_guides_with_rules(guides)
+
+    prompt = (
+        "다음 기준으로 안내문을 검토해줘.\n"
+        "1. 입력 자료에 없는 내용을 단정했는가\n"
+        "2. 핵심 정보가 빠졌는가\n"
+        "3. 사용자가 해야 할 일이 보이는가\n"
+        "4. 위험한 표현이 있는가\n\n"
+        f"안내문:\n{guides}"
+    )
+
+    try:
+        model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL_DEFAULT)
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "당신은 안내문 검토자입니다."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=400,
+            temperature=0.2,
+        )
+        return response.choices[0].message["content"].strip()
+    except Exception:
+        return review_guides_with_rules(guides)
+
+
+def review_guides(guides):
+    if os.environ.get("OPENAI_API_KEY"):
+        return review_guides_with_openai(guides)
+    return review_guides_with_rules(guides)
 
 
 def analyze_gaps(profile, required_skills):
@@ -262,7 +339,7 @@ def write_user_guide_markdown(profile, activities, roadmap):
     return "\n".join(lines).rstrip()
 
 
-def write_review_report(profile, gap_result, activities, roadmap):
+def write_review_report(profile, gap_result, activities, roadmap, review_text):
     checks = [
         ("입력 파일을 읽었는가", bool(profile)),
         ("목표 진로가 있는가", bool(profile.get("target_career"))),
@@ -285,9 +362,12 @@ def write_review_report(profile, gap_result, activities, roadmap):
 
     lines.extend([
         "",
+        "## 검토자 코멘트",
+        review_text,
+        "",
         "## 구현 수준",
         "- 기본형: 규칙 기반 Gap Analysis 함수 에이전트",
-        "- 외부 API, LLM, Docker, LangGraph, RAG는 사용하지 않음",
+        "- OPENAI_API_KEY가 있으면 OpenAI 기반 검토를 시도하고, 없으면 규칙 기반 검토로 fallback 됩니다.",
         "",
         "## 현재 한계",
         "- 입력 데이터의 표현이 크게 바뀌면 키워드 기반 판단이 부정확할 수 있습니다.",
@@ -298,7 +378,7 @@ def write_review_report(profile, gap_result, activities, roadmap):
     return "\n".join(lines).rstrip()
 
 
-def save_outputs(profile, strengths, gap_result, activities, roadmap):
+def save_outputs(profile, strengths, gap_result, activities, roadmap, review_text):
     OUTPUT_PATH.write_text(
         write_output_markdown(profile, strengths, gap_result),
         encoding="utf-8",
@@ -308,12 +388,13 @@ def save_outputs(profile, strengths, gap_result, activities, roadmap):
         encoding="utf-8",
     )
     REVIEW_REPORT_PATH.write_text(
-        write_review_report(profile, gap_result, activities, roadmap),
+        write_review_report(profile, gap_result, activities, roadmap, review_text),
         encoding="utf-8",
     )
 
 
 def main():
+    load_env()
     profile = load_profile()
     target_career = profile.get("target_career", "")
     strengths = analyze_profile_strengths(profile)
@@ -322,7 +403,9 @@ def main():
     activities = recommend_activities(gap_result["gaps"])
     roadmap = make_roadmap(gap_result["gaps"], activities)
     markdown = write_markdown(profile, strengths, gap_result, activities, roadmap)
-    save_outputs(profile, strengths, gap_result, activities, roadmap)
+    guides = write_user_guide_markdown(profile, activities, roadmap)
+    review_text = review_guides(guides)
+    save_outputs(profile, strengths, gap_result, activities, roadmap, review_text)
 
     print(markdown)
 

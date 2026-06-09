@@ -19,12 +19,22 @@ function formatChecklist(items: string[]) {
 }
 
 export function formatCareerReport(analysis: CareerAnalysis) {
-  const scoreLines = scoreLabels
-    .map(
-      ([key, label, maxScore]) =>
-        `- ${label}: ${analysis.scoreItems[key]} / ${maxScore}`,
-    )
-    .join("\n");
+  const scoreLines = analysis.scoreDetails.length
+    ? analysis.scoreDetails
+        .map((item) =>
+          [
+            `- ${item.label}: ${item.score} / ${item.maxScore} (${item.status})`,
+            `  - 산정 근거: ${item.reason}`,
+            `  - 보완 방향: ${item.nextStep}`,
+          ].join("\n"),
+        )
+        .join("\n")
+    : scoreLabels
+        .map(
+          ([key, label, maxScore]) =>
+            `- ${label}: ${analysis.scoreItems[key]} / ${maxScore}`,
+        )
+        .join("\n");
 
   const topCareerLines = analysis.topCareers
     .map((career, index) =>
