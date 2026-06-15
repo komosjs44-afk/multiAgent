@@ -1,0 +1,48 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap");
+@import "tailwindcss";
+
+:root {
+  --navy: #10182b;
+  --navy-2: #1b2740;
+  --paper: #f6f5f1;
+  --paper-2: #eeece5;
+  --lime: #c8ff4d;
+  --lime-soft: #e9ffc2;
+  --ink: #10182b;
+  --muted: #8a93a6;
+  --line: #dcd8ca;
+  --background: var(--paper);
+  --foreground: var(--ink);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "Inter", Arial, Helvetica, sans-serif;
+  --font-heading: "Sora", "Inter", Arial, Helvetica, sans-serif;
+  --font-mono: "Courier New", Consolas, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Inter", Arial, Helvetica, sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: "Sora", "Inter", Arial, Helvetica, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+@layer components {
+  .btn-dark {
+    @apply inline-flex h-11 items-center justify-center rounded-full bg-[var(--navy)] px-5 text-sm font-extrabold text-white transition hover:-translate-y-0.5 hover:bg-[var(--navy-2)];
+  }
+
+  .btn-light {
+    @apply inline-flex h-11 items-center justify-center rounded-full border border-[var(--line)] bg-white px-5 text-sm font-extrabold text-[var(--navy)] transition hover:-translate-y-0.5 hover:bg-[var(--lime-soft)];
+  }
+}
