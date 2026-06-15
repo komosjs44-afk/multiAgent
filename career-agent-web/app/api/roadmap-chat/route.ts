@@ -272,7 +272,7 @@ async function generateOpenAIAnswer({
     };
   }
 
-  const model = getEnvValue("OPENAI_MODEL") || "gpt-5-mini";
+  const model = getEnvValue("OPENAI_MODEL") || "gpt-4o-mini";
   const openAIMessages = buildMessages({ question, profile, analysis, messages });
   const responsesResult = await callResponsesApi({ apiKey, model, messages: openAIMessages });
   if (responsesResult.answer) {

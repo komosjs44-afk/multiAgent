@@ -1,70 +1,74 @@
 import { NextResponse } from "next/server";
 
 import { analyzeCareer } from "@/lib/careerAgent";
-import { fetchJobPostings } from "../../../lib/jobPostings";
+import { jobDescriptionRowsToPostings } from "@/lib/jobDescriptions";
+import { fetchJobPostings } from "@/lib/jobPostings";
 import {
   createClient,
   getAcademicRecords,
   getEvidenceRecords,
+  getJobDescriptions,
+  getProfile,
+  saveAnalysisHistory,
 } from "@/lib/supabase/server";
-import { isUserProfile, validateProfile } from "@/lib/validation";
-import type { AcademicRecord, EvidenceRecord, JobPosting, UserProfile } from "@/types/career";
+import { buildUserProfile } from "@/lib/userProfileBuilder";
+import type {
+  AcademicRecord,
+  CareerAnalysis,
+  CareerProfileRecord,
+  EvidenceRecord,
+  JobPosting,
+  UserProfile,
+} from "@/types/career";
+
+function mergePostings(postings: JobPosting[]) {
+  const seen = new Set<string>();
+
+  return postings.filter((posting) => {
+    const key = `${posting.organization}:${posting.title}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function shouldSaveAnalysis(request: Request, body: Record<string, unknown>) {
+  const url = new URL(request.url);
+  const queryValue = url.searchParams.get("save");
+  if (queryValue === "false" || queryValue === "0") return false;
+  if (body.save === false || body.save === "false" || body.persist === false) return false;
+  return true;
+}
 
 async function generateOpenAISummary(
   profile: UserProfile,
-  analysis: ReturnType<typeof analyzeCareer>,
-  postings: JobPosting[],
+  analysis: CareerAnalysis,
 ): Promise<string | undefined> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return undefined;
-  }
+  if (!apiKey) return undefined;
 
-  const model = process.env.OPENAI_MODEL ?? "gpt-5-mini";
-  const profileSummary = [
-    `학과: ${profile.major}`,
-    `학년: ${profile.grade}`,
-    `목표 진로: ${profile.career}`,
-    `보유 기술: ${profile.skills}`,
-    `프로젝트: ${profile.projects}`,
-    `자격증/시험 준비: ${profile.certificates}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+  const prompt = `공기업 전산직 준비생에게 rule-based 분석 결과를 설명해주세요.
 
-  const topCareersSummary = analysis.topCareers
-    .map(
-      (career) =>
-        `- ${career.name}: ${career.reason} (부족 역량: ${career.missingSkills.join(", ")})`,
-    )
-    .join("\n");
+프로필
+- 학과: ${profile.major}
+- 학년: ${profile.grade}
+- 목표: ${profile.career}
+- 기술: ${profile.skills}
+- 프로젝트/과목 근거: ${profile.projects}
+- 자격증: ${profile.certificates}
 
-  const prompt = `당신은 공기업 전산직 취업 준비생을 도와주는 커리어 코치입니다.
-입력된 프로필과 분석 결과를 바탕으로, 아래 항목을 한국어로 간결하고 실행 가능한 요약문으로 작성하세요.
-
-프로필:
-${profileSummary}
-
-총점: ${analysis.totalScore} / 100
-
+점수: ${analysis.totalScore}/100
 강점:
 ${analysis.strengths.map((item) => `- ${item}`).join("\n")}
 
 부족 역량:
 ${analysis.gaps.map((item) => `- ${item}`).join("\n")}
 
-추천 학습 방향:
+다음 행동:
 ${analysis.nextActions.map((item) => `- ${item}`).join("\n")}
 
-4주 루틴:
-${analysis.roadmap
-      .map((week) => `Week ${week.week}: ${week.title} (${week.actions.join("; ")})`)
-      .join("\n")}
-
-공고 요약:
-${topCareersSummary}
-
-요약문을 세 문단으로 구성하고, 특히 "지금 당장 해야 할 일", "보완할 핵심 역량", "지원 공고 대비 준비 우선순위"를 명확히 설명하세요.`;
+주의: 점수는 합격 예측이 아니라 역량 기반 준비도입니다.`;
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -78,18 +82,17 @@ ${topCareersSummary}
         messages: [
           {
             role: "system",
-            content: "당신은 한국 공기업 전산직 취업 준비생을 돕는 커리어 컨설턴트입니다.",
+            content:
+              "너는 공기업 전산직 취업 준비생을 돕는 커리어 분석 설명자다. 룰 기반 점수는 바꾸지 말고 설명만 한다.",
           },
-          {
-            role: "user",
-            content: prompt,
-          },
+          { role: "user", content: prompt },
         ],
         temperature: 0.3,
         max_tokens: 500,
       }),
     });
 
+    if (!response.ok) return undefined;
     const payload = await response.json();
     const summary = payload?.choices?.[0]?.message?.content;
     return typeof summary === "string" ? summary.trim() : undefined;
@@ -98,118 +101,102 @@ ${topCareersSummary}
   }
 }
 
-function mergeUniqueText(left: string, rightItems: string[]) {
-  const existing = left
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const merged = Array.from(new Set([...existing, ...rightItems.filter(Boolean)]));
-  return merged.join(", ");
-}
-
-function appendLines(value: string, lines: string[]) {
-  const cleanLines = lines.map((line) => line.trim()).filter(Boolean);
-  if (!cleanLines.length) {
-    return value;
-  }
-  return [value.trim(), ...cleanLines].filter(Boolean).join("\n");
-}
-
-async function getSavedCareerData() {
+export async function POST(request: Request) {
   try {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const shouldSave = shouldSaveAnalysis(request, body);
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return { evidence: [] as EvidenceRecord[], academic: [] as AcademicRecord[] };
+      return NextResponse.json({ error: "Login required." }, { status: 401 });
     }
 
-    const [evidence, academic] = await Promise.all([
-      getEvidenceRecords(user.id),
+    const [profileRows, academicRows, evidenceRows] = await Promise.all([
+      getProfile(user.id),
       getAcademicRecords(user.id),
+      getEvidenceRecords(user.id),
     ]);
 
-    return {
-      evidence: Array.isArray(evidence) ? (evidence as EvidenceRecord[]) : [],
-      academic: Array.isArray(academic) ? (academic as AcademicRecord[]) : [],
+    const profile = Array.isArray(profileRows)
+      ? (profileRows[0] as CareerProfileRecord | undefined)
+      : undefined;
+
+    if (!profile) {
+      return NextResponse.json(
+        { error: "Profile required before analysis." },
+        { status: 400 },
+      );
+    }
+
+    const inputSnapshot = buildUserProfile({
+      profile,
+      academic: Array.isArray(academicRows) ? (academicRows as AcademicRecord[]) : [],
+      evidence: Array.isArray(evidenceRows) ? (evidenceRows as EvidenceRecord[]) : [],
+    });
+    const [externalPostingsResult, jobDescriptionsResult] = await Promise.allSettled([
+      fetchJobPostings(inputSnapshot),
+      getJobDescriptions(100),
+    ]);
+    const analysisWarnings: string[] = [];
+    const externalPostings =
+      externalPostingsResult.status === "fulfilled" ? externalPostingsResult.value : [];
+    const jobDescriptions =
+      jobDescriptionsResult.status === "fulfilled" ? jobDescriptionsResult.value : [];
+
+    if (externalPostingsResult.status === "rejected") {
+      console.error("[analyze-career] external job fetch failed", externalPostingsResult.reason);
+      analysisWarnings.push("External job API failed during analysis.");
+    }
+
+    if (jobDescriptionsResult.status === "rejected") {
+      console.error(
+        "[analyze-career] Supabase job_descriptions read failed",
+        jobDescriptionsResult.reason,
+      );
+      analysisWarnings.push("Supabase job_descriptions read failed during analysis.");
+    }
+
+    const postings = mergePostings([
+      ...jobDescriptionRowsToPostings(jobDescriptions as Record<string, unknown>[]),
+      ...externalPostings,
+    ]);
+    const baseAnalysis = analyzeCareer(inputSnapshot, postings);
+    const aiSummary = shouldSave
+      ? await generateOpenAISummary(inputSnapshot, baseAnalysis)
+      : undefined;
+    const usedDemo = postings.some((posting) => posting.sourceStatus === "DEMO");
+    const warningMessages = [
+      ...analysisWarnings,
+      usedDemo
+        ? "Job API unavailable or real job data is insufficient. Demo posting data was included."
+        : "",
+    ].filter(Boolean);
+    const resultSnapshot: CareerAnalysis = {
+      ...baseAnalysis,
+      aiSummary,
+      jobDataSource: usedDemo ? "demo" : "alio",
+      warning: warningMessages.length ? warningMessages.join(" ") : undefined,
     };
-  } catch {
-    return { evidence: [] as EvidenceRecord[], academic: [] as AcademicRecord[] };
-  }
-}
 
-function enrichProfileWithSavedData(
-  profile: UserProfile,
-  evidence: EvidenceRecord[],
-  academic: AcademicRecord[],
-): UserProfile {
-  const evidenceSkills = evidence.flatMap((item) => item.skills);
-  const academicSkills = academic.flatMap((item) => item.skill_mapping);
-  const certificates = evidence
-    .filter((item) => item.type === "certificate")
-    .map((item) => item.title);
-  const evidenceLines = evidence.map((item) =>
-    [
-      `[${item.type}] ${item.title}`,
-      item.organization,
-      item.role,
-      item.result,
-      item.evidence_text,
-    ]
-      .filter(Boolean)
-      .join(" / "),
-  );
-  const academicLines = academic.map((item) =>
-    `[성적] ${item.course_name} ${item.grade} ${item.semester} (${item.skill_mapping.join(", ")})`,
-  );
-
-  return {
-    ...profile,
-    skills: mergeUniqueText(profile.skills, [...evidenceSkills, ...academicSkills]),
-    certificates: mergeUniqueText(profile.certificates, certificates),
-    projects: appendLines(profile.projects, [...evidenceLines, ...academicLines]),
-  };
-}
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-
-    if (!isUserProfile(body)) {
-      return NextResponse.json(
-        { error: "Invalid profile payload" },
-        { status: 400 },
-      );
+    if (shouldSave) {
+      await saveAnalysisHistory({
+        user_id: user.id,
+        input_profile: inputSnapshot,
+        analysis_result: resultSnapshot,
+      });
     }
-
-    const validation = validateProfile(body);
-    if (!validation.isValid) {
-      return NextResponse.json(
-        { error: "Invalid profile input", errors: validation.errors },
-        { status: 400 },
-      );
-    }
-
-    const savedData = await getSavedCareerData();
-    const enrichedProfile = enrichProfileWithSavedData(
-      body,
-      savedData.evidence,
-      savedData.academic,
-    );
-    const postings = await fetchJobPostings(enrichedProfile);
-    const analysis = analyzeCareer(enrichedProfile, postings);
-    const aiSummary = await generateOpenAISummary(enrichedProfile, analysis, postings);
 
     return NextResponse.json({
-      ...analysis,
-      aiSummary,
+      ...resultSnapshot,
+      persisted: shouldSave,
     });
-  } catch {
-    return NextResponse.json(
-      { error: "Failed to analyze career profile" },
-      { status: 500 },
-    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to analyze career profile.";
+    const status = message.includes("environment variables") ? 503 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

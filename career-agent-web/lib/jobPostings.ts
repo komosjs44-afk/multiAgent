@@ -8,13 +8,31 @@ type UnknownRecord = Record<string, unknown>;
 const DEFAULT_ALIO_JSON_LIST_URL = "https://opendata.alio.go.kr/new/odaApiMng/recrutInquiryAjaxList.do";
 const DEFAULT_JOB_ALIO_RECRUIT_URL = "https://job.alio.go.kr/recruit.do";
 const DEFAULT_JOB_ALIO_SOURCE = "잡알리오";
+const PUBLIC_IT_TERMS = [
+  "전산",
+  "정보시스템",
+  "정보통신",
+  "ICT",
+  "IT",
+  "데이터",
+  "DB",
+  "SQL",
+  "시스템",
+  "보안",
+  "네트워크",
+  "서버",
+  "개발",
+  "소프트웨어",
+  "프로그래밍",
+];
+const NON_IT_TERMS = ["의사", "간호", "의료", "보건", "약사", "임상", "병동"];
 
-const demoPublicItPostings: JobPosting[] = [
+const removedLegacyMockPostings: JobPosting[] = [
   {
     id: "demo-public-it-001",
     title: "공공기관 전산직 신입",
     organization: "데모 공고 - API 미연결",
-    source: "fallback-demo",
+    source: "removed_legacy_mock",
     sourceStatus: "DEMO",
     deadline: "상시 확인 필요",
     location: "전국/본사",
@@ -31,7 +49,7 @@ const demoPublicItPostings: JobPosting[] = [
     id: "demo-public-it-002",
     title: "공공 IT 시스템 운영 및 정보보안 담당",
     organization: "데모 공고 - API 미연결",
-    source: "fallback-demo",
+    source: "removed_legacy_mock",
     sourceStatus: "DEMO",
     deadline: "상시 확인 필요",
     location: "수도권",
@@ -48,7 +66,7 @@ const demoPublicItPostings: JobPosting[] = [
     id: "demo-public-it-003",
     title: "데이터/행정 시스템 개발 보조",
     organization: "데모 공고 - API 미연결",
-    source: "fallback-demo",
+    source: "removed_legacy_mock",
     sourceStatus: "DEMO",
     deadline: "상시 확인 필요",
     location: "지역 제한 확인 필요",
@@ -326,6 +344,21 @@ function getSearchKeyword(profile: UserProfile) {
   return "전산";
 }
 
+function getSearchKeywords(profile: UserProfile) {
+  return Array.from(
+    new Set(
+      [
+        profile.targetCompany,
+        getSearchKeyword(profile),
+        "전산",
+        "정보통신",
+      ]
+        .map((keyword) => keyword?.trim())
+        .filter((keyword): keyword is string => Boolean(keyword)),
+    ),
+  );
+}
+
 async function fetchJsonPostings(url: URL) {
   const response = await fetch(url, {
     headers: { Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
@@ -345,48 +378,98 @@ async function fetchJsonPostings(url: URL) {
   return extractItems(payload).map(normalizePosting);
 }
 
-async function fetchAlioJsonPostings(profile: UserProfile) {
-  const response = await fetch(getAlioJsonListUrl(), {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-    },
-    body: new URLSearchParams({
-      pageNo: "1",
-      pageSet: "20",
-      searchKeyword: getSearchKeyword(profile),
-      keyword: getSearchKeyword(profile),
-      ongoingYn: "Y",
-    }),
-    next: { revalidate: 60 * 30 },
-  });
+async function fetchAlioJsonPostingsDetailed(profile: UserProfile) {
+  const allItems: UnknownRecord[] = [];
+  const warnings: string[] = [];
 
-  if (!response.ok) {
-    return [];
+  for (const keyword of getSearchKeywords(profile)) {
+    try {
+      const response = await fetch(getAlioJsonListUrl(), {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+        body: new URLSearchParams({
+          pageNo: "1",
+          pageSet: "50",
+          searchKeyword: keyword,
+          keyword,
+          ongoingYn: "Y",
+        }),
+        next: { revalidate: 60 * 30 },
+      });
+
+      if (!response.ok) {
+        warnings.push(`ALIO JSON request failed for "${keyword}": ${response.status}`);
+        continue;
+      }
+
+      const payload: unknown = await response.json();
+      allItems.push(...extractItems(payload));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      warnings.push(`ALIO JSON request failed for "${keyword}": ${message}`);
+    }
   }
 
-  const payload: unknown = await response.json();
-  const items = extractItems(payload);
-  const filtered = filterAlioItems(items, profile);
-  return filtered.map(normalizeAlioApiPosting);
+  const filtered = filterAlioItems(allItems, profile);
+
+  return {
+    postings: filtered.map(normalizeAlioApiPosting),
+    rawCount: allItems.length,
+    filteredCount: filtered.length,
+    warnings,
+  };
+}
+
+async function fetchAlioJsonPostings(profile: UserProfile) {
+  const result = await fetchAlioJsonPostingsDetailed(profile);
+  return result.postings;
 }
 
 function filterAlioItems(items: UnknownRecord[], profile: UserProfile) {
   const keyword = getSearchKeyword(profile);
-  const terms = Array.from(new Set([keyword, "전산", "정보통신", "ICT", "IT"])).filter(Boolean);
-  const matched = items.filter((item) => {
-    const text = [
-      getString(item, ["recrutPbancTtl", "title"]),
-      getString(item, ["instNm", "organization"]),
-      getString(item, ["ncsCdNmLst"]),
-      getString(item, ["aplyQlfcCn"]),
-      getString(item, ["prefCn", "prefCondCn"]),
-    ].join(" ");
-    return terms.some((term) => text.toLowerCase().includes(term.toLowerCase()));
-  });
+  const terms = Array.from(new Set([keyword, ...PUBLIC_IT_TERMS])).filter(Boolean);
+  const scored = items
+    .map((item) => ({ item, score: getPublicItPostingScore(item, terms) }))
+    .filter(({ score }) => score >= 1)
+    .sort((a, b) => b.score - a.score);
 
-  return (matched.length ? matched : items).slice(0, 5);
+  return scored.map(({ item }) => item).slice(0, 30);
+}
+
+function getPublicItPostingScore(item: UnknownRecord, terms: string[]) {
+  const title = getString(item, ["recrutPbancTtl", "title"]);
+  const ncs = getString(item, ["ncsCdNmLst"]);
+  const details = [
+    getString(item, ["description"]),
+    getString(item, ["requiredExperience"]),
+    getString(item, ["aplyQlfcCn"]),
+    getString(item, ["prefCn", "prefCondCn"]),
+    getString(item, ["scrnprcdrMthdExpln"]),
+  ]
+    .join(" ")
+    .replace(/과학기술정보통신부/g, "");
+  const titleLower = title.toLowerCase();
+  const ncsLower = ncs.toLowerCase();
+  const detailLower = details.toLowerCase();
+  let score = 0;
+
+  for (const term of terms) {
+    const lower = term.toLowerCase();
+    if (titleLower.includes(lower)) score += 3;
+    if (ncsLower.includes(lower)) score += 2;
+    if (detailLower.includes(lower)) score += 1;
+  }
+
+  const combined = `${title} ${ncs} ${details}`.toLowerCase();
+  const looksNonIt = NON_IT_TERMS.some((term) => combined.includes(term));
+  if (looksNonIt && score < 3) {
+    return 0;
+  }
+
+  return score;
 }
 
 function normalizeAlioApiPosting(item: UnknownRecord, index: number) {
@@ -428,6 +511,7 @@ function inferPreferredCertificates(text: string) {
 }
 
 async function fetchJobAlioHtmlPostings(profile: UserProfile) {
+  const collected: JobPosting[] = [];
   const keywords = Array.from(new Set([getSearchKeyword(profile), "전산", "정보통신"]));
 
   for (const keyword of keywords) {
@@ -443,13 +527,16 @@ async function fetchJobAlioHtmlPostings(profile: UserProfile) {
     }
 
     const html = await response.text();
-    const postings = parseJobAlioRows(html).map((item, index) => normalizePosting(item, index));
-    if (postings.length) {
-      return postings;
+    const rows = parseJobAlioRows(html);
+    const filtered = filterAlioItems(rows, profile);
+    if (filtered.length) {
+      collected.push(
+        ...filtered.map((item, index) => normalizePosting(item, collected.length + index)),
+      );
     }
   }
 
-  return [];
+  return uniqueById(collected).slice(0, 30);
 }
 
 function parseJobAlioRows(html: string): UnknownRecord[] {
@@ -559,6 +646,73 @@ export async function fetchJobPostings(profile: UserProfile): Promise<JobPosting
     }
   }
 
-  const postings = uniqueById(livePostings).slice(0, 5);
-  return postings.length ? postings : demoPublicItPostings;
+  const postings = uniqueById(livePostings).slice(0, 30);
+  return postings;
+}
+
+export async function fetchJobPostingsWithDebug(profile: UserProfile): Promise<{
+  postings: JobPosting[];
+  debug: {
+    alioRawCount: number;
+    alioFilteredCount: number;
+    alioReadCount: number;
+    configuredApiReadCount: number;
+    jobAlioHtmlReadCount: number;
+    returnedCount: number;
+    usedFallback: boolean;
+  };
+  warnings: string[];
+}> {
+  const configuredUrl = makeConfiguredOpenApiUrl(profile);
+  const warnings: string[] = [];
+  let livePostings: JobPosting[] = [];
+  let alioRawCount = 0;
+  let alioFilteredCount = 0;
+  let configuredApiReadCount = 0;
+  let jobAlioHtmlReadCount = 0;
+
+  const alioResult = await fetchAlioJsonPostingsDetailed(profile);
+  livePostings = alioResult.postings;
+  alioRawCount = alioResult.rawCount;
+  alioFilteredCount = alioResult.filteredCount;
+  warnings.push(...alioResult.warnings);
+
+  if (livePostings.length < 30 && configuredUrl) {
+    try {
+      const configuredPostings = await fetchJsonPostings(configuredUrl);
+      configuredApiReadCount = configuredPostings.length;
+      livePostings = uniqueById([...livePostings, ...configuredPostings]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      console.error("[job-postings] configured API fetch failed", error);
+      warnings.push(`Configured job API failed: ${message}`);
+    }
+  }
+
+  if (livePostings.length < 30) {
+    try {
+      const htmlPostings = await fetchJobAlioHtmlPostings(profile);
+      jobAlioHtmlReadCount = htmlPostings.length;
+      livePostings = uniqueById([...livePostings, ...htmlPostings]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      console.error("[job-postings] Job-Alio HTML fetch failed", error);
+      warnings.push(`Job-Alio HTML fetch failed: ${message}`);
+    }
+  }
+
+  const postings = uniqueById(livePostings).slice(0, 30);
+  return {
+    postings,
+    debug: {
+      alioRawCount,
+      alioFilteredCount,
+      alioReadCount: alioFilteredCount,
+      configuredApiReadCount,
+      jobAlioHtmlReadCount,
+      returnedCount: postings.length,
+      usedFallback: false,
+    },
+    warnings,
+  };
 }

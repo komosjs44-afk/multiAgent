@@ -131,6 +131,42 @@ const PROJECT_BY_SKILL: Record<string, string> = {
   "로그 분석": "로그 기반 장애 원인 분석 보고서",
 };
 
+const COMPANY_PREP_PROFILES: Array<{
+  aliases: string[];
+  label: string;
+  requiredSkills: string[];
+  actions: string[];
+}> = [
+  {
+    aliases: ["인천국제공항공사", "인국공", "인천공항"],
+    label: "인천국제공항공사 전산직",
+    requiredSkills: ["시스템 운영", "네트워크", "보안", "DB", "Linux", "문서화", "정보처리기사", "NCS"],
+    actions: [
+      "공항 운영 시스템, 여객/수하물/시설 IT 업무를 가정해 장애 대응 시나리오 1개를 작성합니다.",
+      "네트워크 장애, 접근권한, 로그 확인 절차를 운영 보고서 형식으로 정리합니다.",
+      "인천국제공항공사 최근 공고의 NCS 직무기술서에서 전산/정보통신 요구역량을 따로 표로 뽑습니다.",
+    ],
+  },
+  {
+    aliases: ["한국전력공사", "한전"],
+    label: "한국전력공사 전산직",
+    requiredSkills: ["DB", "시스템 운영", "보안", "네트워크", "Linux", "문서화", "정보처리기사", "NCS"],
+    actions: [
+      "전력/민원/요금 업무 시스템을 가정한 DB/API 미니 프로젝트를 정리합니다.",
+      "공공기관 개인정보/보안 점검 체크리스트를 프로젝트 산출물에 추가합니다.",
+    ],
+  },
+  {
+    aliases: ["한국철도공사", "코레일"],
+    label: "한국철도공사 전산직",
+    requiredSkills: ["시스템 운영", "네트워크", "DB", "보안", "Linux", "문서화", "정보처리기사", "NCS"],
+    actions: [
+      "교통 운영 시스템 장애 대응과 로그 분석 시나리오를 정리합니다.",
+      "예약/운행 데이터 기반 SQL 조회 프로젝트를 보완합니다.",
+    ],
+  },
+];
+
 function normalize(text: string) {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -189,6 +225,17 @@ function getTargetRule(targetCareer: string) {
   );
 }
 
+function getTargetCompanyProfile(profile: UserProfile) {
+  const target = normalize(`${profile.targetCompany ?? ""} ${profile.career}`);
+  return COMPANY_PREP_PROFILES.find((company) =>
+    company.aliases.some((alias) => target.includes(normalize(alias))),
+  );
+}
+
+function getTargetCompanyName(profile: UserProfile) {
+  return profile.targetCompany?.trim() || getTargetCompanyProfile(profile)?.label || "";
+}
+
 function getRecommendedCertificates(
   missingSkills: string[],
   existingCertificates: string,
@@ -207,7 +254,7 @@ function getLearningDirections(missingSkills: string[]) {
   return missingSkills
     .map((skill) => LEARNING_BY_SKILL[skill])
     .filter(Boolean)
-    .slice(0, 3);
+    .slice(0, 30);
 }
 
 function getRecommendedProjects(missingSkills: string[]) {
@@ -215,6 +262,83 @@ function getRecommendedProjects(missingSkills: string[]) {
     .map((skill) => PROJECT_BY_SKILL[skill])
     .filter(Boolean)
     .slice(0, 3);
+}
+
+function scoreByKeywords(text: string, rules: Array<{ points: number; keywords: string[] }>) {
+  return rules.reduce(
+    (sum, rule) => sum + (includesAny(text, rule.keywords) ? rule.points : 0),
+    0,
+  );
+}
+
+function makeJobScoreBreakdown({
+  evidenceText,
+  certificatesText,
+  projectsText,
+  requiredSkills,
+  matchedSkills,
+  missingSkills,
+  hasPublicItSignal,
+  isTargetCompanyPosting,
+}: {
+  evidenceText: string;
+  certificatesText: string;
+  projectsText: string;
+  requiredSkills: string[];
+  matchedSkills: string[];
+  missingSkills: string[];
+  hasPublicItSignal: boolean;
+  isTargetCompanyPosting: boolean;
+}): JobRecommendation["scoreBreakdown"] {
+  const academic = clampScore(
+    scoreByKeywords(evidenceText, [
+      { points: 4, keywords: ["자료구조", "data structure"] },
+      { points: 4, keywords: ["운영체제", "os"] },
+      { points: 5, keywords: ["데이터베이스", "database", "db", "sql"] },
+      { points: 4, keywords: ["네트워크", "데이터통신", "network"] },
+      { points: 3, keywords: ["알고리즘", "algorithm"] },
+    ]),
+    20,
+  );
+  const certificate = clampScore(
+    scoreByKeywords(certificatesText, [
+      { points: 15, keywords: ["정보처리기사"] },
+      { points: 10, keywords: ["sqld"] },
+      { points: 5, keywords: ["컴활", "컴퓨터활용능력"] },
+      { points: 8, keywords: ["정보보안기사"] },
+      { points: 6, keywords: ["네트워크관리사", "리눅스마스터"] },
+    ]),
+    20,
+  );
+  const project = clampScore(
+    scoreByKeywords(projectsText, [
+      { points: 8, keywords: ["db", "database", "sql", "erd", "데이터베이스"] },
+      { points: 5, keywords: ["api", "rest", "backend", "server"] },
+      { points: 4, keywords: ["github", "git", "배포", "deploy", "vercel"] },
+      { points: 4, keywords: ["프로젝트", "서비스", "개발"] },
+    ]),
+    20,
+  );
+  const skills = clampScore(
+    requiredSkills.length ? (matchedSkills.length / requiredSkills.length) * 30 : 0,
+    30,
+  );
+  const preference = clampScore(
+    (hasPublicItSignal ? 5 : 0) + (isTargetCompanyPosting ? 10 : 0),
+    15,
+  );
+  const penalty = Math.min(missingSkills.length * 3, 15);
+  const total = clampScore(academic + certificate + project + skills + preference - penalty);
+
+  return {
+    academic,
+    certificate,
+    project,
+    skills,
+    preference,
+    penalty,
+    total,
+  };
 }
 
 type ProjectEvidenceProfile = {
@@ -317,19 +441,30 @@ function getProjectLevelLabel(level: ProjectEvidenceProfile["level"]) {
 }
 
 function makeTopCareers(
-  targetCareer: string,
+  profile: UserProfile,
   evidenceText: string,
   totalScore: number,
 ): CareerAnalysis["topCareers"] {
-  return CAREER_REQUIRED_SKILLS.map((rule) => {
+  const targetCompany = getTargetCompanyProfile(profile);
+  const companyCareer = targetCompany
+    ? {
+        name: `${targetCompany.label} 목표 Gap 분석`,
+        keywords: targetCompany.aliases,
+        requiredSkills: targetCompany.requiredSkills,
+        actions: targetCompany.actions,
+      }
+    : null;
+  const rules = companyCareer ? [companyCareer, ...CAREER_REQUIRED_SKILLS] : CAREER_REQUIRED_SKILLS;
+
+  return rules.map((rule) => {
     const matched = getMatchedSkills(evidenceText, rule.requiredSkills);
     const missing = getMissingSkills(evidenceText, rule.requiredSkills);
     const keywordHits = rule.keywords.filter((keyword) =>
       includesAny(evidenceText, [keyword]),
     ).length;
-    const isTarget = targetCareer && includesAny(`${rule.name} ${rule.keywords.join(" ")}`, [targetCareer]);
+    const isTargetCompany = Boolean(companyCareer && rule.name === companyCareer.name);
     const fitScore = clampScore(
-      totalScore * 0.4 + matched.length * 8 + keywordHits * 5 + (isTarget ? 10 : 0),
+      totalScore * 0.25 + matched.length * 6 + keywordHits * 3 + (isTargetCompany ? 8 : 0),
     );
     const priorityGaps = missing.slice(0, 3);
     const learningDirections = getLearningDirections(priorityGaps);
@@ -338,7 +473,7 @@ function makeTopCareers(
     return {
       name: rule.name,
       fitScore,
-      reason: `공기업 전산직 요구역량 ${rule.requiredSkills.length}개 중 ${matched.length}개가 현재 입력 Evidence에서 확인됩니다. 이 점수는 실제 결과 예측이 아니라 역량 기반 예상 적합도입니다.`,
+      reason: `${rule.name} 요구역량 ${rule.requiredSkills.length}개 중 ${matched.length}개가 현재 입력 Evidence에서 확인됩니다. 점수는 실제 결과 예측이 아니라 보수적인 역량 기반 예상 적합도입니다.`,
       missingSkills: priorityGaps,
       recommendedActions: unique([
         ...rule.actions,
@@ -347,8 +482,11 @@ function makeTopCareers(
       ]).slice(0, 5),
     };
   })
-    .sort((a, b) => b.fitScore - a.fitScore)
-    .slice(0, 3);
+    .sort((a, b) => {
+      const aTarget = companyCareer && a.name === companyCareer.name ? 1 : 0;
+      const bTarget = companyCareer && b.name === companyCareer.name ? 1 : 0;
+      return bTarget - aTarget || b.fitScore - a.fitScore;
+    });
 }
 
 function makeRoadmap(
@@ -447,13 +585,16 @@ function makeExpectedProblems(missingSkills: string[]): JobRecommendation["expec
   ];
 }
 
-function recommendJobs(
+export function recommendJobs(
   profile: UserProfile,
   postings: JobPosting[],
+  limit = 3,
 ): JobRecommendation[] {
   const skillList = parseSkills(profile.skills);
   const evidenceText = getEvidenceText(profile, skillList);
   const certText = profile.certificates;
+  const targetCompany = getTargetCompanyName(profile);
+  const targetAliases = getTargetCompanyProfile(profile)?.aliases ?? (targetCompany ? [targetCompany] : []);
 
   return postings
     .map((posting) => {
@@ -472,19 +613,40 @@ function recommendJobs(
       const certGaps = posting.preferredCertificates.filter(
         (certificate) => !normalize(certText).includes(normalize(certificate)),
       );
+      const postingText = `${posting.title} ${posting.organization} ${posting.description}`;
+      const isTargetCompanyPosting =
+        targetAliases.length > 0 && includesAny(postingText, targetAliases);
       const skillScore = requiredSkills.length
-        ? (matchedSkills.length / requiredSkills.length) * 70
-        : 35;
+        ? (matchedSkills.length / requiredSkills.length) * 50
+        : 20;
       const certScore = posting.preferredCertificates.length
-        ? (certMatches.length / posting.preferredCertificates.length) * 20
-        : 8;
+        ? (certMatches.length / posting.preferredCertificates.length) * 12
+        : 3;
       const publicItSignal = includesAny(
-        `${posting.title} ${posting.organization} ${posting.description}`,
+        postingText,
         [profile.career, "공기업", "공공기관", "전산", "정보시스템", "it"],
       )
-        ? 10
-        : 4;
-      const fitScore = clampScore(skillScore + certScore + publicItSignal);
+        ? 8
+        : 0;
+      const targetCompanyBonus = isTargetCompanyPosting ? 18 : 0;
+      const missingPenalty = Math.min(missingSkills.length * 4, 16);
+      const noCoreCertificatePenalty = includesAny(certText, ["정보처리기사", "SQLD", "정보보안기사"])
+        ? 0
+        : 8;
+      const fitScore = clampScore(
+        skillScore + certScore + publicItSignal + targetCompanyBonus - missingPenalty - noCoreCertificatePenalty,
+      );
+      const scoreBreakdown = makeJobScoreBreakdown({
+        evidenceText,
+        certificatesText: certText,
+        projectsText: profile.projects,
+        requiredSkills,
+        matchedSkills,
+        missingSkills,
+        hasPublicItSignal: publicItSignal > 0,
+        isTargetCompanyPosting,
+      });
+      const finalFitScore = scoreBreakdown.total;
       const recommendedCertificates = getRecommendedCertificates(
         missingSkills,
         certText,
@@ -493,8 +655,9 @@ function recommendJobs(
 
       return {
         posting,
-        fitScore,
-        estimatedPassRate: fitScore,
+        fitScore: finalFitScore,
+        estimatedPassRate: finalFitScore,
+        scoreBreakdown,
         matchedSkills,
         missingSkills,
         recommendedCertificates,
@@ -505,8 +668,22 @@ function recommendJobs(
         expectedProblems: makeExpectedProblems(missingSkills),
       };
     })
-    .sort((a, b) => b.fitScore - a.fitScore)
-    .slice(0, 3);
+    .sort((a, b) => {
+      const aTarget = targetAliases.length && includesAny(
+        `${a.posting.title} ${a.posting.organization} ${a.posting.description}`,
+        targetAliases,
+      )
+        ? 1
+        : 0;
+      const bTarget = targetAliases.length && includesAny(
+        `${b.posting.title} ${b.posting.organization} ${b.posting.description}`,
+        targetAliases,
+      )
+        ? 1
+        : 0;
+      return bTarget - aTarget || b.fitScore - a.fitScore;
+    })
+    .slice(0, Math.max(1, limit));
 }
 
 function makeSystemRisks(): CareerAnalysis["systemRisks"] {
@@ -572,7 +749,6 @@ function getProjectNextStep(projectEvidence: ProjectEvidenceProfile) {
 
 function makeScoreDetails({
   scoreItems,
-  skillList,
   projectEvidence,
   targetMatchedSkills,
   targetMissingSkills,
@@ -582,7 +758,6 @@ function makeScoreDetails({
   activityKeywords,
 }: {
   scoreItems: CareerAnalysis["scoreItems"];
-  skillList: string[];
   projectEvidence: ProjectEvidenceProfile;
   targetMatchedSkills: string[];
   targetMissingSkills: string[];
@@ -603,11 +778,11 @@ function makeScoreDetails({
       label: "전공 적합도",
       maxScore: 20,
       reason:
-        majorFit >= 20
-          ? "학과명이 IT/전산 계열과 직접 연결되어 20점을 반영했습니다."
-          : "전공명만으로는 전산직 연결성이 약해 10점을 반영했습니다.",
+        majorFit >= 16
+          ? "학과명이 IT/전산 계열과 직접 연결되지만, 목표 기업 적합도는 과목/프로젝트/자격증 근거가 함께 있어야 하므로 16점까지만 반영했습니다."
+          : "전공명만으로는 전산직 연결성이 약해 6점을 반영했습니다.",
       nextStep:
-        majorFit >= 20
+        majorFit >= 16
           ? "전공 과목 중 DB, 운영체제, 네트워크, 보안 과목 성적이나 과제 산출물을 추가하면 근거가 더 단단해집니다."
           : "전공 외 IT 과목, 부트캠프, 프로젝트, 자격증 근거를 추가해 전산직 연결성을 보완하세요.",
     },
@@ -615,7 +790,7 @@ function makeScoreDetails({
       key: "techStack",
       label: "기술 스택",
       maxScore: 20,
-      reason: `보유 기술 ${skillList.length}개를 5점 단위로 계산하고, 공고 요구역량 매칭(${formatEvidenceList(targetMatchedSkills)})을 함께 확인했습니다.`,
+      reason: `단순 기술 개수가 아니라 목표 기업/직무 요구역량 매칭(${formatEvidenceList(targetMatchedSkills)})을 중심으로 보수적으로 계산했습니다.`,
       nextStep: getTechStackNextStep(scoreItems.techStack, targetMissingSkills),
     },
     {
@@ -643,7 +818,7 @@ function makeScoreDetails({
       label: "자격증",
       maxScore: 10,
       reason: certificatesText
-        ? `자격증/시험 준비 입력을 확인해 ${scoreItems.certificates}점을 반영했습니다. 입력 내용: ${certificatesText}`
+        ? `정보처리기사 보유 여부를 가장 크게 보고, SQLD/보안/네트워크/Linux 계열 자격증은 부분 점수로 반영했습니다. 입력 내용: ${certificatesText}`
         : "자격증 또는 시험 준비 입력이 없어 0점입니다.",
       nextStep:
         scoreItems.certificates >= 10
@@ -695,8 +870,10 @@ export function analyzeCareer(
   const careerText = profile.career.trim();
   const evidenceText = getEvidenceText(profile, skillList);
   const targetRule = getTargetRule(careerText);
-  const targetMissingSkills = getMissingSkills(evidenceText, targetRule.requiredSkills);
-  const targetMatchedSkills = getMatchedSkills(evidenceText, targetRule.requiredSkills);
+  const companyProfile = getTargetCompanyProfile(profile);
+  const targetRequiredSkills = companyProfile?.requiredSkills ?? targetRule.requiredSkills;
+  const targetMissingSkills = getMissingSkills(evidenceText, targetRequiredSkills);
+  const targetMatchedSkills = getMatchedSkills(evidenceText, targetRequiredSkills);
 
   const strengths: string[] = [];
   const gaps: string[] = [];
@@ -704,16 +881,23 @@ export function analyzeCareer(
   const scoreReasons: string[] = [];
 
   const majorFit = includesAny(profile.major, ["컴퓨터", "소프트웨어", "정보", "전산", "it"])
-    ? 20
-    : 10;
+    ? 16
+    : 6;
   scoreReasons.push(
-    majorFit === 20
+    majorFit >= 16
       ? "전공이 공기업 전산직과 직접 연결되어 전공 적합도 근거가 높습니다."
       : "전공과 IT 직무의 연결 근거를 프로젝트, 자격증, 활동 Evidence로 보완해야 합니다.",
   );
 
-  const techStack = clampScore(skillList.length * 5, 20);
-  scoreReasons.push(`보유 기술 ${skillList.length}개를 기준으로 기술 스택 점수를 산정했습니다.`);
+  const techStack = clampScore(
+    targetRequiredSkills.length
+      ? (targetMatchedSkills.length / targetRequiredSkills.length) * 18
+      : skillList.length * 3,
+    20,
+  );
+  scoreReasons.push(
+    `보유 기술 개수보다 목표 기업/직무 요구역량 ${targetRequiredSkills.length}개 중 ${targetMatchedSkills.length}개가 확인되는지를 우선 반영했습니다.`,
+  );
   if (techStack >= 15) {
     strengths.push("여러 기술 스택을 보유해 실무 학습 기반이 있습니다.");
   } else {
@@ -722,9 +906,9 @@ export function analyzeCareer(
 
   const projectExperienceBase = {
     none: 0,
-    idea: 8,
-    practice: 12,
-    deliverable: 17,
+    idea: 4,
+    practice: 8,
+    deliverable: 14,
     portfolio: 20,
   }[projectEvidence.level];
   const projectExperience = clampScore(projectExperienceBase, 20);
@@ -758,7 +942,11 @@ export function analyzeCareer(
     gaps.push("문제 해결 또는 협업 활동 Evidence 부족");
   }
 
-  const certificates = certificatesText ? 10 : 0;
+  const certificates = includesAny(certificatesText, ["정보처리기사"])
+    ? 10
+    : includesAny(certificatesText, ["SQLD", "정보보안기사", "네트워크관리사", "리눅스마스터"])
+      ? 5
+      : 0;
   scoreReasons.push(
     certificatesText
       ? "자격증 또는 시험 준비 경험이 있어 기초 검증 근거가 있습니다."
@@ -770,7 +958,7 @@ export function analyzeCareer(
     gaps.push("정보처리기사 또는 직무 관련 자격증 근거 부족");
   }
 
-  const careerClarity = careerText.length >= 4 ? 10 : 5;
+  const careerClarity = profile.targetCompany && careerText.length >= 4 ? 10 : careerText.length >= 4 ? 7 : 4;
   scoreReasons.push(
     careerClarity === 10
       ? "목표 직무가 구체적이어서 공고 기반 Gap 분석 방향이 명확합니다."
@@ -784,7 +972,7 @@ export function analyzeCareer(
     targetMissingSkills.length <= 3,
     projectEvidence.level === "deliverable" || projectEvidence.level === "portfolio",
   ].filter(Boolean).length;
-  const actionability = clampScore(2 + actionabilitySignals * 2, 10);
+  const actionability = clampScore(actionabilitySignals * 1.5, 10);
   scoreReasons.push(
     actionability >= 8
       ? "기술, 프로젝트, 자격 근거가 있어 바로 실행 계획으로 연결하기 좋습니다."
@@ -796,6 +984,12 @@ export function analyzeCareer(
 
   if (targetMatchedSkills.length) {
     strengths.push(`공기업 전산직 핵심 역량 중 ${targetMatchedSkills.join(", ")} 근거가 확인됩니다.`);
+  }
+  if (companyProfile) {
+    gaps.push(
+      `${companyProfile.label} 적합도를 올리려면 ${targetMissingSkills.slice(0, 4).join(", ") || "공고별 세부 요구역량"} 근거를 더 명확히 만들어야 합니다.`,
+    );
+    nextActions.push(...companyProfile.actions.map((action) => `${companyProfile.label} 준비: ${action}`));
   }
   gaps.push(
     ...targetMissingSkills.map(
@@ -836,7 +1030,6 @@ export function analyzeCareer(
   const totalScore = Object.values(scoreItems).reduce((sum, score) => sum + score, 0);
   const scoreDetails = makeScoreDetails({
     scoreItems,
-    skillList,
     projectEvidence,
     targetMatchedSkills,
     targetMissingSkills,
@@ -845,7 +1038,7 @@ export function analyzeCareer(
     majorFit,
     activityKeywords,
   });
-  const topCareers = makeTopCareers(careerText, evidenceText, totalScore);
+  const topCareers = makeTopCareers(profile, evidenceText, totalScore);
   const jobRecommendations = recommendJobs(profile, postings);
 
   return {

@@ -1,3 +1,4 @@
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
@@ -29,6 +30,20 @@ export async function createClient() {
   });
 }
 
+export function createAdminClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !serviceRoleKey) return null;
+
+  return createSupabaseClient(url, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
+
 type AnalysisHistoryInput = {
   input_profile: unknown;
   analysis_result: unknown;
@@ -41,8 +56,40 @@ type ProfileInput = {
   university: string;
   major: string;
   grade: string;
+  gpa: number | null;
+  target_company_type: string;
+  target_company: string;
+  target_job: string;
   target_career: string;
 };
+
+function isMissingProfilesColumnError(error: unknown) {
+  if (!error || typeof error !== "object" || !("message" in error)) {
+    return false;
+  }
+
+  const message = String((error as { message?: unknown }).message ?? "");
+  return (
+    message.includes("schema cache") &&
+    message.includes("profiles") &&
+    (message.includes("gpa") ||
+      message.includes("target_company_type") ||
+      message.includes("target_company") ||
+      message.includes("target_job"))
+  );
+}
+
+function toLegacyProfileInput(input: ProfileInput) {
+  return {
+    user_id: input.user_id,
+    name: input.name,
+    university: input.university,
+    major: input.major,
+    grade: input.grade,
+    target_career: input.target_career || input.target_job || "공기업 전산직",
+    updated_at: new Date().toISOString(),
+  };
+}
 
 type AcademicRecordInput = {
   user_id: string;
@@ -64,6 +111,26 @@ type EvidenceRecordInput = {
   skills: string[];
   evidence_text: string;
 };
+
+export async function getJobDescriptions(limit = 50) {
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const supabase = createAdminClient() ?? (await createClient());
+  const { data, error } = await supabase
+    .from("job_descriptions")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(safeLimit);
+
+  if (error) {
+    console.error("[supabase] failed to read public.job_descriptions", error);
+    throw error;
+  }
+  return data;
+}
+
+export function hasSupabaseServiceRoleKey() {
+  return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
 
 export async function saveAnalysisHistory(input: AnalysisHistoryInput) {
   if (!input.user_id) {
@@ -118,7 +185,17 @@ export async function upsertProfile(input: ProfileInput) {
     )
     .select();
 
-  if (error) throw error;
+  if (error && isMissingProfilesColumnError(error)) {
+    const { data: legacyData, error: legacyError } = await supabase
+      .from("profiles")
+      .upsert(toLegacyProfileInput(input), { onConflict: "user_id" })
+      .select();
+
+    if (legacyError) throw new Error(legacyError.message);
+    return legacyData;
+  }
+
+  if (error) throw new Error(error.message);
   return data;
 }
 

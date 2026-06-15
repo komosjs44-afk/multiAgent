@@ -6,6 +6,21 @@ function getString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function getNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Number(getString(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return fallback;
+}
+
 export async function GET() {
   try {
     const supabase = await createClient();
@@ -18,10 +33,11 @@ export async function GET() {
     }
 
     const rows = await getProfile(user.id);
-    return NextResponse.json({ data: Array.isArray(rows) ? rows[0] ?? null : null });
+    return NextResponse.json({
+      data: Array.isArray(rows) ? rows[0] ?? null : null,
+    });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to load profile.";
+    const message = getErrorMessage(error, "Failed to load profile.");
     const status = message.includes("environment variables") ? 503 : 500;
     return NextResponse.json({ error: message }, { status });
   }
@@ -39,19 +55,24 @@ export async function POST(request: Request) {
     }
 
     const body = (await request.json()) as Record<string, unknown>;
+    const targetJob = getString(body.target_job) || "공기업 전산직";
+
     const saved = await upsertProfile({
       user_id: user.id,
       name: getString(body.name),
       university: getString(body.university),
       major: getString(body.major),
       grade: getString(body.grade),
-      target_career: getString(body.target_career),
+      gpa: getNumber(body.gpa),
+      target_company_type: getString(body.target_company_type),
+      target_company: getString(body.target_company),
+      target_job: targetJob,
+      target_career: getString(body.target_career) || targetJob,
     });
 
     return NextResponse.json({ data: saved }, { status: 201 });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to save profile.";
+    const message = getErrorMessage(error, "Failed to save profile.");
     const status = message.includes("environment variables") ? 503 : 500;
     return NextResponse.json({ error: message }, { status });
   }

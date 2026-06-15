@@ -121,6 +121,75 @@ export async function POST(request: Request) {
   }
 }
 
+export async function PATCH(request: Request) {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Login required." }, { status: 401 });
+    }
+
+    const body = (await request.json()) as Record<string, unknown>;
+    const id = getString(body.id);
+    const type = body.type;
+    const title = getString(body.title);
+
+    if (!id) {
+      return NextResponse.json({ error: "id is required." }, { status: 400 });
+    }
+
+    if (!isEvidenceRecordType(type)) {
+      return NextResponse.json({ error: "Invalid evidence type." }, { status: 400 });
+    }
+
+    if (!title) {
+      return NextResponse.json({ error: "title is required." }, { status: 400 });
+    }
+
+    const skills = getSkills(body.skills);
+    const evidenceText =
+      getString(body.evidence_text) ||
+      [
+        title,
+        getString(body.organization),
+        getString(body.description),
+        getString(body.role),
+        getString(body.result),
+        skills.join(", "),
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+    const { data, error } = await supabase
+      .from("evidence_records")
+      .update({
+        type,
+        title,
+        organization: getNullableString(body.organization),
+        description: getNullableString(body.description),
+        role: getNullableString(body.role),
+        result: getNullableString(body.result),
+        skills,
+        evidence_text: evidenceText,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .select();
+
+    if (error) throw error;
+    return NextResponse.json({ data });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to update evidence.";
+    const status = message.includes("environment variables") ? 503 : 500;
+    return NextResponse.json({ error: message }, { status });
+  }
+}
+
 export async function DELETE(request: Request) {
   try {
     const supabase = await createClient();

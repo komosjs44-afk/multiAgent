@@ -2,6 +2,8 @@ export type UserProfile = {
   major: string;
   grade: string;
   career: string;
+  targetCompany?: string;
+  targetCompanyType?: string;
   skills: string;
   projects: string;
   certificates: string;
@@ -14,6 +16,10 @@ export type CareerProfileRecord = {
   university: string;
   major: string;
   grade: string;
+  gpa: number | null;
+  target_company_type: string;
+  target_company: string;
+  target_job: string;
   target_career: string;
   created_at: string;
   updated_at: string;
@@ -56,6 +62,7 @@ export type EvidenceRecord = {
 
 export type JobPosting = {
   id: string;
+  recommendationId?: string;
   title: string;
   organization: string;
   source: string;
@@ -75,6 +82,15 @@ export type JobRecommendation = {
   posting: JobPosting;
   fitScore: number;
   estimatedPassRate: number;
+  scoreBreakdown: {
+    academic: number;
+    certificate: number;
+    project: number;
+    skills: number;
+    preference: number;
+    penalty: number;
+    total: number;
+  };
   matchedSkills: string[];
   missingSkills: string[];
   recommendedCertificates: string[];
@@ -84,6 +100,92 @@ export type JobRecommendation = {
     impact: string;
     solution: string;
   }>;
+};
+
+export type JobRecommendationSource = {
+  type: "supabase" | "alio";
+  label: "직무기술서 기반" | "실시간 채용공고";
+  confidence: number;
+};
+
+export type JobRecommendationResponseItem = {
+  id: string;
+  recommendationId: string;
+  companyName: string;
+  title: string;
+  region: string | null;
+  deadline: string | null;
+  source: JobRecommendationSource;
+  fitScore: number;
+  scoreBreakdown: JobRecommendation["scoreBreakdown"];
+  matchedKeywords: string[];
+  reason: string;
+  recruitUrl: string | null;
+  isTargetCompanyMatch: boolean;
+  requiredSkills: string[];
+  missingSkills: string[];
+  recommendedCertificates: string[];
+  boostRoutine: string[];
+};
+
+export type JobRecommendationMeta = {
+  sourceCounts: {
+    supabaseJobDescriptions: number;
+    supabaseRawRows: number;
+    alioRawJobs: number;
+    alioFilteredJobs: number;
+    alioReturnedJobs: number;
+    mergedCandidates: number;
+    deduplicatedCandidates: number;
+    filteredCandidates: number;
+    finalRecommendations: number;
+    duplicatedRecommendationIds: string[];
+  };
+  debug: Record<string, unknown>;
+  warnings: string[];
+};
+
+export type JobRecommendationsApiResponse =
+  | {
+      ok: true;
+      data: {
+        recommendations: JobRecommendationResponseItem[];
+        topRecommendations: JobRecommendationResponseItem[];
+        otherRelevantJobs: JobRecommendationResponseItem[];
+      };
+      meta: JobRecommendationMeta;
+    }
+  | {
+      ok: false;
+      error: {
+        code: "LOGIN_REQUIRED" | "PROFILE_REQUIRED" | "NO_JOB_MATCH_FOUND" | "JOB_RECOMMENDATION_FAILED";
+        message: string;
+        hint?: string;
+      };
+      meta?: Partial<JobRecommendationMeta>;
+    };
+
+export type JobDescriptionRecord = {
+  id: string;
+  company_name: string;
+  title: string;
+  target_job: string | null;
+  description: string;
+  required_skills: string[] | null;
+  preferred_certificates: string[] | null;
+  source_url: string | null;
+  created_at: string;
+};
+
+export type JobFitResult = {
+  jobDescription: JobDescriptionRecord;
+  fitScore: number;
+  matchedSkills: string[];
+  missingSkills: string[];
+  matchedCertificates: string[];
+  missingCertificates: string[];
+  reasons: string[];
+  preparationActions: string[];
 };
 
 export type CareerAnalysis = {
@@ -130,6 +232,8 @@ export type CareerAnalysis = {
     cause: string;
     mitigation: string;
   }>;
+  jobDataSource?: "alio" | "env_api" | "job_alio_html" | "demo";
+  warning?: string;
 };
 
 export type ValidationResult = {
@@ -163,12 +267,36 @@ export type EvidenceDocument = {
 
 export type ExtractedEvidence = {
   documentType: EvidenceDocumentType;
+  type?: EvidenceDocumentType;
   fileName: string;
   extractedAt: string;
   skills: string[];
   certificates: string[];
   projects: string[];
+  courses?: Array<{
+    courseName: string;
+    courseCode?: string;
+    category?: string;
+    credit?: number | null;
+    grade?: string;
+    semester?: string;
+    skillMapping: string[];
+  }>;
   grade?: string;
+  rawText?: string;
+  pages?: Array<{
+    page: number;
+    text: string;
+  }>;
+  pageCount?: number;
+  diagnostics?: {
+    rawTextLength: number;
+    detectedCourseCodeCount: number;
+    detectedSemesterCount: number;
+    parsedCourseCount: number;
+    warnings: string[];
+  };
+  warning?: string;
 };
 
 export type EvidenceAnalysisDraft = {
