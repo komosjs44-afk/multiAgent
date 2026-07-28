@@ -8,10 +8,16 @@ type Props = {
   title: string;
   children: ReactNode;
   footer?: ReactNode;
+  size?: "default" | "wide";
 };
 
-export default function Modal({ isOpen, onClose, title, children, footer }: Props) {
+export default function Modal({ isOpen, onClose, title, children, footer, size = "default" }: Props) {
   if (!isOpen) return null;
+
+  const widthClass = size === "wide" ? "sm:max-w-[60rem]" : "sm:max-w-lg";
+  const rowClass = footer
+    ? "grid-rows-[auto_minmax(0,1fr)_auto]"
+    : "grid-rows-[auto_minmax(0,1fr)]";
 
   return (
     <div
@@ -19,10 +25,10 @@ export default function Modal({ isOpen, onClose, title, children, footer }: Prop
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-t-[2rem] bg-white p-6 shadow-2xl sm:rounded-[2rem]"
+        className={`grid max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] gap-5 overflow-hidden rounded-t-[2rem] bg-white p-6 shadow-2xl sm:rounded-[2rem] ${widthClass} ${rowClass}`}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="mb-5 flex items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center justify-between gap-4">
           <h3 className="text-lg font-extrabold text-[var(--ink)]">{title}</h3>
           <button
             type="button"
@@ -33,10 +39,14 @@ export default function Modal({ isOpen, onClose, title, children, footer }: Prop
             ×
           </button>
         </div>
-        <div className="grid max-h-[60vh] gap-4 overflow-y-auto pr-1">
+        <div className="grid min-h-0 min-w-0 gap-4 overflow-x-hidden overflow-y-auto pr-1 [&_*]:min-w-0">
           {children}
         </div>
-        {footer ? <div className="mt-5 flex justify-end gap-3">{footer}</div> : null}
+        {footer ? (
+          <div className="flex min-w-0 flex-wrap justify-end gap-3 border-t border-[var(--line)] pt-4">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );

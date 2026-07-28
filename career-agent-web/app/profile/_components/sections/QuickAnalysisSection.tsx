@@ -431,7 +431,7 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
       <Modal
         isOpen={previewOpen}
         onClose={() => setPreviewOpen(false)}
-        title="성적표 인식 결과 확인"
+        title="성적표 인식 결과 확인" size="wide"
         footer={
           <>
             <button type="button" onClick={() => setPreviewOpen(false)} className="btn-light">
@@ -497,14 +497,14 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
         </div>
 
         {Object.entries(groupedRows).map(([semester, rows]) => (
-          <div key={semester} className="grid gap-3 rounded-3xl border border-[var(--line)] p-4">
+          <div key={semester} className="grid min-w-0 gap-3 rounded-3xl border border-[var(--line)] p-4">
             <div className="flex items-center justify-between">
               <h4 className="font-extrabold text-[var(--ink)]">{semester}</h4>
               <span className="text-xs font-bold text-slate-400">{rows.length}과목</span>
             </div>
             {rows.map((row) => (
-              <div key={row.id} className="grid gap-2 rounded-2xl bg-slate-50 p-3">
-                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+              <div key={row.id} className="grid min-w-0 gap-3 rounded-2xl bg-slate-50 p-3">
+                <div className="grid min-w-0 gap-2 md:grid-cols-2">
                   <PreviewInput
                     label="학기"
                     value={row.semester}
@@ -517,13 +517,6 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
                     onChange={(value) => updateTranscriptRow(row.id, { courseCode: value })}
                     placeholder="AS011C"
                   />
-                  <button
-                    type="button"
-                    onClick={() => removeTranscriptRow(row.id)}
-                    className="self-end rounded-xl border border-red-100 px-3 py-2 text-xs font-extrabold text-red-500 hover:bg-red-50"
-                  >
-                    삭제
-                  </button>
                 </div>
                 <PreviewInput
                   label="과목명"
@@ -531,7 +524,7 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
                   onChange={(value) => updateTranscriptRow(row.id, { courseName: value })}
                   placeholder="운영체제"
                 />
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid min-w-0 gap-2 md:grid-cols-3">
                   <PreviewInput
                     label="이수구분"
                     value={row.category}
@@ -550,6 +543,15 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
                     onChange={(value) => updateTranscriptRow(row.id, { grade: value })}
                     placeholder="A0"
                   />
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => removeTranscriptRow(row.id)}
+                    className="rounded-xl border border-red-100 px-3 py-2 text-xs font-extrabold text-red-500 hover:bg-red-50"
+                  >
+                    삭제
+                  </button>
                 </div>
               </div>
             ))}
@@ -581,13 +583,13 @@ function PreviewInput({
   placeholder?: string;
 }) {
   return (
-    <label className="grid gap-1">
+    <label className="grid w-full min-w-0 gap-1">
       <span className="text-xs font-bold text-slate-500">{label}</span>
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-10 rounded-xl border border-[var(--line)] bg-white px-3 text-sm outline-none focus:border-[var(--navy)]"
+        className="h-10 w-full min-w-0 rounded-xl border border-[var(--line)] bg-white px-3 text-sm outline-none focus:border-[var(--navy)]"
       />
     </label>
   );
