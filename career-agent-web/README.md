@@ -36,22 +36,38 @@ http://127.0.0.1:3100
 
 ## 환경변수
 
-`.env.local` 파일에 아래 값을 설정합니다.
+`.env.local` 파일에 아래 값을 설정합니다. 전체 목록과 설명은 `.env.local.example`을 참고하세요.
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 
-ALIO_OPEN_API_URL=your-alio-or-job-api-url
-ALIO_OPEN_API_KEY=your-open-api-key
+# 서버 전용, 선택
+SUPABASE_SERVICE_ROLE_KEY=optional-service-role-key
 
+# 공고 수집 API, 모두 선택 (없으면 기본 ALIO JSON/HTML 소스로 동작)
+ALIO_JSON_LIST_URL=optional-override
+ALIO_OPEN_API_URL=optional-configured-api-url
+ALIO_OPEN_API_KEY=optional-configured-api-key
+JOB_ALIO_RECRUIT_URL=optional-override
+
+# AI 요약/로드맵 채팅, 선택
 OPENAI_API_KEY=optional-openai-api-key
 OPENAI_MODEL=gpt-4o-mini
 
-SUPABASE_SERVICE_ROLE_KEY=optional-service-role-key
+# Supabase 없이 데모 데이터로 시연하려면 true
+NEXT_PUBLIC_DEMO_MODE=false
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY`는 서버에서만 사용해야 하며, 클라이언트에 노출하면 안 됩니다.
+
+## 데모 모드
+
+Supabase 프로젝트가 일시중지·삭제되었거나 외부 공고 API가 응답하지 않을 때도 핵심 화면을 시연할 수 있도록,
+`NEXT_PUBLIC_DEMO_MODE=true`로 설정하면 고정된 데모 사용자·프로필·학업기록·Evidence·직무기술서·공고·분석 이력을
+`lib/demo/`에서 읽어 화면에 표시합니다. 실제 로그인·저장 흐름을 건드리지 않으며, `false`(기본값)일 때는
+기존 Supabase 흐름이 그대로 동작합니다. 데모 모드는 조회 화면(프로필 확인, 대시보드, 추천 공고) 기준으로 동작하며,
+분석 재실행이나 Evidence 추가 같은 저장 동작은 이번 단계에서는 데모 모드 대상이 아닙니다.
 
 ## Supabase 설정
 
