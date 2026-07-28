@@ -7,6 +7,7 @@ import {
   createClient,
   getAcademicRecords,
   getEvidenceRecords,
+  getEvidenceSkills,
   getJobDescriptions,
   getProfile,
   saveAnalysisHistory,
@@ -17,6 +18,7 @@ import type {
   CareerAnalysis,
   CareerProfileRecord,
   EvidenceRecord,
+  EvidenceSkillRow,
   JobPosting,
   UserProfile,
 } from "@/types/career";
@@ -114,10 +116,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Login required." }, { status: 401 });
     }
 
-    const [profileRows, academicRows, evidenceRows] = await Promise.all([
+    const [profileRows, academicRows, evidenceRows, evidenceSkillRows] = await Promise.all([
       getProfile(user.id),
       getAcademicRecords(user.id),
       getEvidenceRecords(user.id),
+      getEvidenceSkills(user.id),
     ]);
 
     const profile = Array.isArray(profileRows)
@@ -135,6 +138,9 @@ export async function POST(request: Request) {
       profile,
       academic: Array.isArray(academicRows) ? (academicRows as AcademicRecord[]) : [],
       evidence: Array.isArray(evidenceRows) ? (evidenceRows as EvidenceRecord[]) : [],
+      confirmedSkillRows: Array.isArray(evidenceSkillRows)
+        ? (evidenceSkillRows as EvidenceSkillRow[])
+        : [],
     });
     const [externalPostingsResult, jobDescriptionsResult] = await Promise.allSettled([
       fetchJobPostings(inputSnapshot),

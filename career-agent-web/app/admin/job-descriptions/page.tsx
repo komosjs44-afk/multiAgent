@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type JobDescriptionRow = {
   id: string;
@@ -44,7 +44,7 @@ export default function AdminJobDescriptionsPage() {
     return search.toString();
   }, [active, query]);
 
-  async function loadItems() {
+  const loadItems = useCallback(async () => {
     setLoading(true);
     const response = await fetch(`/api/admin/job-descriptions?${params}`);
     const payload = (await response.json()) as ApiResponse;
@@ -59,7 +59,7 @@ export default function AdminJobDescriptionsPage() {
     setItems(payload.data.items);
     setStatus(`${payload.data.items.length}개 직무기술서를 불러왔습니다.`);
     setLoading(false);
-  }
+  }, [params]);
 
   async function toggleActive(item: JobDescriptionRow) {
     const response = await fetch(`/api/admin/job-descriptions/${item.id}`, {
@@ -93,8 +93,10 @@ export default function AdminJobDescriptionsPage() {
   }
 
   useEffect(() => {
-    void loadItems();
-  }, [params]);
+    // 마운트 시 동기적으로 setState가 실행되지 않도록 다음 마이크로태스크로 미룹니다
+    // (React Compiler의 react-hooks/set-state-in-effect 규칙 대응).
+    void Promise.resolve().then(() => loadItems());
+  }, [loadItems]);
 
   return (
     <main className="min-h-screen bg-[var(--paper)] px-4 py-8 text-[var(--ink)]">

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
+import { isDemoMode } from "@/lib/demo/config";
 import type {
   JobRecommendationResponseItem,
   JobRecommendationsApiResponse,
@@ -40,21 +41,23 @@ export default function JobsPage() {
     setMessage("현재 프로필과 최신 공고 데이터를 기준으로 추천공고를 계산하고 있습니다.");
 
     try {
-      if (!isSupabaseConfigured()) {
-        setPayload(null);
-        setMessage("Supabase 환경변수가 설정되지 않아 추천공고를 계산할 수 없습니다.");
-        return;
-      }
+      if (!isDemoMode()) {
+        if (!isSupabaseConfigured()) {
+          setPayload(null);
+          setMessage("Supabase 환경변수가 설정되지 않아 추천공고를 계산할 수 없습니다.");
+          return;
+        }
 
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
 
-      if (!user) {
-        setPayload(null);
-        setMessage("로그인하면 추천공고를 계산할 수 있습니다.");
-        return;
+        if (!user) {
+          setPayload(null);
+          setMessage("로그인하면 추천공고를 계산할 수 있습니다.");
+          return;
+        }
       }
 
       const response = await fetch("/api/job-recommendations?limit=30", {
@@ -97,7 +100,9 @@ export default function JobsPage() {
   }, []);
 
   useEffect(() => {
-    void loadRecommendations();
+    // 마운트 시 동기적으로 setState가 실행되지 않도록 다음 마이크로태스크로 미룹니다
+    // (React Compiler의 react-hooks/set-state-in-effect 규칙 대응).
+    void Promise.resolve().then(() => loadRecommendations());
   }, [loadRecommendations]);
 
   const recommendations = payload?.recommendations ?? [];
@@ -110,6 +115,13 @@ export default function JobsPage() {
   const maxFit = recommendations.length
     ? Math.max(...recommendations.map((job) => job.fitScore))
     : 0;
+  const demoCount = recommendations.filter((job) => job.isDemo).length;
+  const fallbackCount = recommendations.filter((job) => job.isFallback && !job.isDemo).length;
+  const latestFetchedAt = recommendations
+    .map((job) => job.fetchedAt)
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1);
 
   return (
     <main className="min-h-screen bg-[var(--paper)] text-[var(--ink)]">
@@ -195,6 +207,22 @@ export default function JobsPage() {
                 ALIO 필터 후보 {payload.sourceCounts?.alioFilteredJobs ?? 0}개,
                 최종 추천 {payload.sourceCounts?.finalRecommendations ?? 0}개
               </p>
+              {latestFetchedAt ? (
+                <p className="mt-1 text-xs text-slate-400">
+                  마지막 수집 시각: {new Date(latestFetchedAt).toLocaleString("ko-KR")}
+                </p>
+              ) : null}
+              {demoCount > 0 ? (
+                <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                  공고 {demoCount}건은 실 API 연결 실패로 대체된 데모 데이터입니다.
+                </p>
+              ) : fallbackCount > 0 ? (
+                <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                  공고 {fallbackCount}건은 실 API 응답 실패로 마지막 정상 캐시 데이터를 표시하고 있습니다.
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-emerald-700">실시간 공고 데이터 기준입니다.</p>
+              )}
             </section>
 
             {payload.topRecommendations.length ? (
@@ -267,6 +295,15 @@ function JobCard({
             {job.isTargetCompanyMatch ? (
               <span className="rounded-full bg-[var(--lime)] px-3 py-1 text-xs font-black text-[var(--navy)]">
                 목표기업 매칭
+              </span>
+            ) : null}
+            {job.isDemo ? (
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-800">
+                데모 데이터
+              </span>
+            ) : job.isFallback ? (
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-800">
+                캐시 데이터
               </span>
             ) : null}
           </div>

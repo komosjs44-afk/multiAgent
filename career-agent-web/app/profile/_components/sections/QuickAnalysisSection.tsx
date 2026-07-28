@@ -93,19 +93,36 @@ function normalizeRows(rows: TranscriptRow[], existingRecords: AcademicRecord[])
 
 export default function QuickAnalysisSection({ profile, academicRecords, onRefresh, onToast }: Props) {
   const router = useRouter();
-  const initialTargets = useMemo(
-    () => splitTargets(profile?.target_company),
-    [profile?.target_company],
-  );
-  const [targets, setTargets] = useState(initialTargets);
+  const [targets, setTargets] = useState(() => splitTargets(profile?.target_company));
   const [isSaving, setIsSaving] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isSavingTranscript, setIsSavingTranscript] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [transcriptRows, setTranscriptRows] = useState<TranscriptRow[]>([]);
   const [extractedGpa, setExtractedGpa] = useState("");
   const [diagnostics, setDiagnostics] = useState<ExtractedEvidence["diagnostics"]>();
   const visibleTargets = targets.filter(Boolean);
   const groupedRows = useMemo(() => groupRowsBySemester(transcriptRows), [transcriptRows]);
+
+  // profile.target_company는 이 화면 밖(새로고침, 다른 저장 동작의 refetch)에서도 바뀔 수 있으므로,
+  // 마운트 시 한 번만 초기화하는 useState 대신, 렌더 중 값이 바뀐 것을 감지하면 즉시 다시 동기화합니다.
+  // (useEffect로 처리하면 한 프레임 늦게 반영되고 React Compiler가 경고하는 패턴이라, React가
+  // 권장하는 "렌더 중 상태 조정" 방식을 사용합니다.)
+  const [syncedTargetCompany, setSyncedTargetCompany] = useState(profile?.target_company ?? null);
+  if (syncedTargetCompany !== (profile?.target_company ?? null)) {
+    setSyncedTargetCompany(profile?.target_company ?? null);
+    setTargets(splitTargets(profile?.target_company));
+  }
+
+  const lastSavedAt = useMemo(() => {
+    if (!academicRecords.length) return null;
+    return academicRecords.reduce<string | null>((latest, record) => {
+      if (!record.created_at) return latest;
+      if (!latest || record.created_at > latest) return record.created_at;
+      return latest;
+    }, null);
+  }, [academicRecords]);
 
   function updateTarget(index: number, value: string) {
     setTargets((current) =>
@@ -219,6 +236,8 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
   }
 
   async function saveTranscriptPreview() {
+    if (isSavingTranscript) return; // 이중 클릭으로 같은 과목이 두 번 저장되는 것을 방지합니다.
+
     const rowsToSave = normalizeRows(transcriptRows, academicRecords);
 
     if (!rowsToSave.length && !extractedGpa.trim()) {
@@ -226,18 +245,13 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
       return;
     }
 
+    setIsSavingTranscript(true);
     try {
+      // 목표기업 등 다른 필드는 건드리지 않고, 이 화면이 실제로 알아낸 값만 부분 업데이트합니다.
       if (extractedGpa.trim()) {
         await postJson("/api/career-profile", {
-          university: profile?.university ?? "",
-          major: profile?.major ?? "",
-          grade: profile?.grade ?? "",
           gpa: extractedGpa.trim(),
-          target_company_type: profile?.target_company_type ?? "",
-          target_company:
-            targets.filter(Boolean).join(", ") || profile?.target_company || "",
-          target_job: profile?.target_job || "공기업 전산직",
-          target_career: profile?.target_career || profile?.target_job || "공기업 전산직",
+          target_company: targets.filter(Boolean).join(", "),
         });
       }
 
@@ -261,6 +275,8 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
         error instanceof Error ? error.message : "성적 저장에 실패했습니다.",
         "error",
       );
+    } finally {
+      setIsSavingTranscript(false);
     }
   }
 
@@ -268,18 +284,26 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
     setIsSaving(true);
     try {
       await postJson("/api/career-profile", {
-        university: profile?.university ?? "",
-        major: profile?.major ?? "",
-        grade: profile?.grade ?? "",
-        gpa: profile?.gpa ?? null,
-        target_company_type: profile?.target_company_type ?? "",
         target_company: targets.filter(Boolean).join(", "),
-        target_job: profile?.target_job || "공기업 전산직",
-        target_career: profile?.target_career || profile?.target_job || "공기업 전산직",
       });
-
-      await fetch("/api/analyze-career", { method: "POST" });
       onRefresh();
+    } catch (error) {
+      onToast(
+        error instanceof Error ? error.message : "목표 기업 저장에 실패했습니다.",
+        "error",
+      );
+      setIsSaving(false);
+      return;
+    }
+    setIsSaving(false);
+
+    setIsAnalyzing(true);
+    try {
+      const response = await fetch("/api/analyze-career", { method: "POST" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "분석 실행에 실패했습니다.");
+      }
       onToast("목표 기업 기준으로 분석이 업데이트되었습니다.", "success");
       router.push("/result");
     } catch (error) {
@@ -288,7 +312,7 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
         "error",
       );
     } finally {
-      setIsSaving(false);
+      setIsAnalyzing(false);
     }
   }
 
@@ -296,6 +320,13 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
     <>
       <SectionCard title="빠른 분석 설정" impactLabel="목표 기업과 성적표 기반 자동 입력">
         <div className="grid gap-6">
+          <div className="grid gap-2 rounded-2xl bg-slate-50 p-4 sm:grid-cols-4">
+            <SummaryField label="학년" value={profile?.grade || "-"} />
+            <SummaryField label="학교" value={profile?.university || "-"} />
+            <SummaryField label="전공" value={profile?.major || "-"} />
+            <SummaryField label="GPA" value={profile?.gpa != null ? String(profile.gpa) : "-"} />
+          </div>
+
           <div>
             <div className="flex items-center justify-between gap-4">
               <h3 className="text-sm font-extrabold text-[var(--ink)]">
@@ -341,16 +372,33 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
             <h3 className="text-sm font-extrabold text-[var(--ink)]">
               성적표 PDF 업로드
             </h3>
-            <p className="mt-2 text-sm leading-6 text-slate-500">
-              텍스트 선택이 가능한 성적표 PDF를 올리면 학기, 과목명, 학점, 성적을
-              추출합니다. 저장 전 미리보기에서 수정할 수 있습니다.
-            </p>
+
+            {academicRecords.length > 0 ? (
+              <div className="mt-3 grid gap-2 rounded-2xl bg-emerald-50 p-4 text-xs font-bold text-emerald-800 sm:grid-cols-4">
+                <span className="rounded-full bg-white px-3 py-1.5 text-center">✓ 학업성적 저장 완료</span>
+                <span className="rounded-full bg-white px-3 py-1.5 text-center">
+                  {lastSavedAt ? `마지막 저장: ${new Date(lastSavedAt).toLocaleDateString("ko-KR")}` : "저장 시각 미확인"}
+                </span>
+                <span className="rounded-full bg-white px-3 py-1.5 text-center">
+                  저장된 과목 {academicRecords.length}개
+                </span>
+                <span className="rounded-full bg-white px-3 py-1.5 text-center">
+                  GPA {profile?.gpa != null ? profile.gpa : "미입력"}
+                </span>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                텍스트 선택이 가능한 성적표 PDF를 올리면 학기, 과목명, 학점, 성적을
+                추출합니다. 저장 전 미리보기에서 수정할 수 있습니다.
+              </p>
+            )}
+
             <p className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-bold leading-5 text-amber-800">
               현재는 텍스트가 선택되는 PDF만 지원합니다. 스캔본 또는 이미지 기반 PDF는 OCR을
               지원하지 않아 추출에 실패할 수 있습니다.
             </p>
             <label className="mt-4 inline-flex cursor-pointer rounded-full bg-[var(--navy)] px-5 py-3 text-sm font-extrabold text-white transition hover:bg-[var(--navy-2)]">
-              {isExtracting ? "추출 중..." : "PDF 선택"}
+              {isExtracting ? "추출 중..." : academicRecords.length > 0 ? "다시 업로드" : "PDF 선택"}
               <input
                 type="file"
                 accept=".pdf,application/pdf"
@@ -371,10 +419,10 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
             <button
               type="button"
               onClick={saveAndAnalyze}
-              disabled={isSaving}
+              disabled={isSaving || isAnalyzing}
               className="h-12 rounded-full bg-[var(--lime)] px-6 text-sm font-black text-[var(--navy)] transition hover:bg-[var(--lime-soft)] disabled:opacity-50"
             >
-              {isSaving ? "분석 중..." : "저장하고 분석하기"}
+              {isSaving ? "저장 중..." : isAnalyzing ? "분석 중..." : "저장하고 분석하기"}
             </button>
           </div>
         </div>
@@ -389,8 +437,13 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
             <button type="button" onClick={() => setPreviewOpen(false)} className="btn-light">
               닫기
             </button>
-            <button type="button" onClick={saveTranscriptPreview} className="btn-dark">
-              전체 저장
+            <button
+              type="button"
+              onClick={saveTranscriptPreview}
+              disabled={isSavingTranscript}
+              className="btn-dark disabled:opacity-50"
+            >
+              {isSavingTranscript ? "저장 중..." : "전체 저장"}
             </button>
           </>
         }
@@ -504,6 +557,15 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
         ))}
       </Modal>
     </>
+  );
+}
+
+function SummaryField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-white px-3 py-2">
+      <p className="text-xs font-bold text-slate-400">{label}</p>
+      <p className="mt-0.5 text-sm font-extrabold text-[var(--ink)]">{value}</p>
+    </div>
   );
 }
 

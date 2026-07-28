@@ -56,6 +56,56 @@ export type EvidenceRecord = {
   result: string | null;
   skills: string[];
   evidence_text: string;
+  implemented_features: string | null;
+  problem_solved: string | null;
+  evidence_url: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SkillCode =
+  | "programming"
+  | "web_development"
+  | "api_design"
+  | "database"
+  | "operating_system"
+  | "network"
+  | "security"
+  | "data_analysis"
+  | "ai_ml"
+  | "cloud"
+  | "system_operation"
+  | "problem_solving"
+  | "collaboration"
+  | "documentation"
+  | "communication";
+
+export type SkillConfidence = "high" | "medium" | "low";
+export type SkillContributionLevel = "strong" | "medium" | "weak";
+export type EvidenceSkillSource = "rule" | "ai" | "user";
+
+export type EvidenceSkillCandidate = {
+  skillCode: SkillCode;
+  contributionLevel: SkillContributionLevel;
+  confidence: SkillConfidence;
+  matchedKeywords: string[];
+  reason: string;
+  source: EvidenceSkillSource;
+};
+
+export type EvidenceSkillRow = {
+  id: string;
+  user_id: string;
+  evidence_id: string;
+  skill_code: SkillCode;
+  source: EvidenceSkillSource;
+  confidence: SkillConfidence;
+  contribution_level: SkillContributionLevel;
+  matched_keywords: string[];
+  reason: string | null;
+  is_confirmed: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -76,6 +126,12 @@ export type JobPosting = {
   requiredSkills: string[];
   preferredCertificates: string[];
   requiredExperience?: string;
+  /** ISO timestamp of when this posting data was actually fetched (or, for fallback data, when it was last known-good). */
+  fetchedAt?: string;
+  /** true if this posting came from a fallback tier (cache or demo data), not a live API response. */
+  isFallback?: boolean;
+  /** true if this posting is static demo/sample data, not real collected data. */
+  isDemo?: boolean;
 };
 
 export type JobRecommendation = {
@@ -126,6 +182,9 @@ export type JobRecommendationResponseItem = {
   missingSkills: string[];
   recommendedCertificates: string[];
   boostRoutine: string[];
+  fetchedAt?: string;
+  isFallback?: boolean;
+  isDemo?: boolean;
 };
 
 export type JobRecommendationMeta = {

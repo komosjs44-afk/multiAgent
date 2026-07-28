@@ -38,15 +38,13 @@ export default function BasicInfoSection({ profile, onRefresh, onToast }: Props)
   async function handleSave() {
     setSaving(true);
     try {
+      // 이 화면이 실제로 편집하는 필드만 보냅니다. 목표기업 등 다른 화면이 관리하는 값은
+      // 서버가 기존 값을 그대로 유지합니다(부분 업데이트).
       await postJson("/api/career-profile", {
         university: form.university,
         major: form.major,
         grade: form.grade,
         gpa: form.gpa,
-        target_company_type: profile?.target_company_type ?? "",
-        target_company: profile?.target_company ?? "",
-        target_job: profile?.target_job ?? "공기업 전산직",
-        target_career: profile?.target_career ?? "공기업 전산직",
       });
       onRefresh();
       onToast("기본 정보가 저장되었습니다.", "success");

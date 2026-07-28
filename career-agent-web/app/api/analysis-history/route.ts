@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 
 import {
   createClient,
+  getCurrentUserId,
   getRecentAnalysisHistory,
   saveAnalysisHistory,
 } from "@/lib/supabase/server";
+import { describeSupabaseError } from "@/lib/supabase/errors";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -51,22 +53,16 @@ export async function POST(request: Request) {
 
 export async function GET() {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const userId = await getCurrentUserId();
 
-    if (!user) {
+    if (!userId) {
       return NextResponse.json({ data: [] });
     }
 
-    const rows = await getRecentAnalysisHistory(user.id);
+    const rows = await getRecentAnalysisHistory(userId);
     return NextResponse.json({ data: rows });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to load analysis history.";
-    const status = message.includes("environment variables") ? 503 : 500;
-
+    const { message, status } = describeSupabaseError(error, "Failed to load analysis history.");
     return NextResponse.json({ error: message }, { status });
   }
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
+import { DEMO_USER_NAME, isDemoMode } from "@/lib/demo/config";
 
 type AuthState = {
   isLoading: boolean;
@@ -41,7 +42,7 @@ const features = [
     description: "공기업 전산직 공고를 현재 프로필과 매칭해 우선순위로 보여줍니다.",
   },
   {
-    title: "목표 공기업 달성률",
+    title: "목표 준비 진행도",
     description: "1~3순위 목표 기업별 준비도와 부족 역량을 한눈에 정리합니다.",
   },
   {
@@ -65,6 +66,11 @@ export default function HomePage() {
     let ignore = false;
 
     async function loadAuthState() {
+      if (isDemoMode()) {
+        setAuthState({ isLoading: false, isLoggedIn: true, userName: DEMO_USER_NAME });
+        return;
+      }
+
       if (!isSupabaseConfigured()) {
         setAuthState({ isLoading: false, isLoggedIn: false, userName: "" });
         return;
@@ -169,7 +175,7 @@ function GuestHero() {
         지금 뭘 해야 할지 바로 보여드립니다
       </h1>
       <p className="mt-6 max-w-2xl text-base leading-8 text-white/70 sm:text-lg">
-        채용공고, 목표 기업 가능성, 부족 역량, 다음 행동을 한 화면에서
+        채용공고, 목표 기업 적합도, 부족 역량, 다음 행동을 한 화면에서
         정리하는 AI 커리어 대시보드입니다.
       </p>
       <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -220,7 +226,7 @@ function LoggedInHero({ userName }: { userName: string }) {
         </Link>
       </div>
       <div className="mt-6 grid max-w-2xl gap-3 sm:grid-cols-3">
-        {["맞춤 공고", "합격 가능성", "다음 행동"].map((item) => (
+        {["맞춤 공고", "현재 지원 적합도", "다음 행동"].map((item) => (
           <div key={item} className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3">
             <p className="text-sm font-extrabold text-white">{item}</p>
             <p className="mt-1 text-xs text-white/55">로그인 계정 기준 분석</p>

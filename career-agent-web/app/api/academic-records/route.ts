@@ -3,8 +3,10 @@ import { NextResponse } from "next/server";
 import {
   createClient,
   getAcademicRecords,
+  getCurrentUserId,
   saveAcademicRecord,
 } from "@/lib/supabase/server";
+import { describeSupabaseError } from "@/lib/supabase/errors";
 
 function getString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -30,23 +32,31 @@ function getSkillMapping(value: unknown) {
     .filter(Boolean);
 }
 
+function describeAcademicRecordError(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : fallback;
+  const isDuplicateKey =
+    (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "23505") ||
+    message.includes("academic_records_user_semester_course_idx");
+
+  if (isDuplicateKey) {
+    return { message: "이미 등록된 과목입니다(동일 학기·과목명).", status: 409 };
+  }
+
+  return { message, status: message.includes("environment variables") ? 503 : 500 };
+}
+
 export async function GET() {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const userId = await getCurrentUserId();
 
-    if (!user) {
+    if (!userId) {
       return NextResponse.json({ error: "Login required." }, { status: 401 });
     }
 
-    const rows = await getAcademicRecords(user.id);
+    const rows = await getAcademicRecords(userId);
     return NextResponse.json({ data: rows });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to load academic records.";
-    const status = message.includes("environment variables") ? 503 : 500;
+    const { message, status } = describeSupabaseError(error, "Failed to load academic records.");
     return NextResponse.json({ error: message }, { status });
   }
 }
@@ -80,9 +90,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ data: saved }, { status: 201 });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to save academic record.";
-    const status = message.includes("environment variables") ? 503 : 500;
+    const { message, status } = describeAcademicRecordError(error, "Failed to save academic record.");
     return NextResponse.json({ error: message }, { status });
   }
 }
@@ -126,9 +134,7 @@ export async function PATCH(request: Request) {
     if (error) throw error;
     return NextResponse.json({ data });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to update academic record.";
-    const status = message.includes("environment variables") ? 503 : 500;
+    const { message, status } = describeAcademicRecordError(error, "Failed to update academic record.");
     return NextResponse.json({ error: message }, { status });
   }
 }

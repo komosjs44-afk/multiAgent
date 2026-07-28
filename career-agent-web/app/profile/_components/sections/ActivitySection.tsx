@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 
-import { deleteRecord, patchJson, postJson } from "../apiUtils";
+import { deleteRecord, fetchSkillPreview, patchJson, postJson, toSkillCandidates } from "../apiUtils";
 import EmptyState from "../shared/EmptyState";
 import Modal from "../shared/Modal";
 import SectionCard from "../shared/SectionCard";
-import type { EvidenceRecord, EvidenceRecordType } from "@/types/career";
+import SkillCandidateReview from "../shared/SkillCandidateReview";
+import type { EvidenceRecord, EvidenceRecordType, EvidenceSkillCandidate, EvidenceSkillRow } from "@/types/career";
 
 type ActivityCategory =
   | "internship"
@@ -45,6 +46,7 @@ type ActivityMeta = {
 
 type Props = {
   records: EvidenceRecord[];
+  skillsByEvidenceId: Record<string, EvidenceSkillRow[]>;
   onRefresh: () => void;
   onToast: (msg: string, type: "success" | "error") => void;
 };
@@ -61,6 +63,9 @@ type FormState = {
   startDate: string;
   endDate: string;
   isOngoing: boolean;
+  implementedFeatures: string;
+  problemSolved: string;
+  evidenceUrl: string;
 };
 
 const ACTIVITY_OPTIONS: ActivityOption[] = [
@@ -158,6 +163,9 @@ const EMPTY: FormState = {
   startDate: "",
   endDate: "",
   isOngoing: false,
+  implementedFeatures: "",
+  problemSolved: "",
+  evidenceUrl: "",
 };
 
 function getOptionByCategory(category: ActivityCategory) {
@@ -222,6 +230,26 @@ function formatPeriod(meta: ActivityMeta) {
   return "";
 }
 
+/** started_at/ended_at 컬럼(YYYY-MM-DD)을 우선 사용하고, 없으면 기존 evidence_text meta로 폴백합니다. */
+function getDisplayPeriod(record: EvidenceRecord) {
+  if (record.started_at || record.ended_at) {
+    return formatPeriod({
+      startDate: record.started_at?.slice(0, 7),
+      endDate: record.ended_at?.slice(0, 7),
+      isOngoing: Boolean(record.started_at && !record.ended_at),
+    });
+  }
+  return formatPeriod(parseActivityMeta(record));
+}
+
+function toDateColumn(monthValue: string) {
+  return monthValue ? `${monthValue}-01` : "";
+}
+
+function toMonthInput(dateValue: string | null | undefined) {
+  return dateValue ? dateValue.slice(0, 7) : "";
+}
+
 function buildEvidenceText(form: FormState) {
   const meta: ActivityMeta = {
     category: form.activityCategory,
@@ -244,12 +272,15 @@ function buildEvidenceText(form: FormState) {
     .join("\n");
 }
 
-export default function ActivitySection({ records, onRefresh, onToast }: Props) {
+export default function ActivitySection({ records, skillsByEvidenceId, onRefresh, onToast }: Props) {
   const [open, setOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<EvidenceRecord | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const [candidates, setCandidates] = useState<EvidenceSkillCandidate[]>([]);
+  const [extracting, setExtracting] = useState(false);
 
   const selectedOption = getOptionByCategory(form.activityCategory);
   const labels = FIELD_LABELS[form.activityCategory];
@@ -257,6 +288,8 @@ export default function ActivitySection({ records, onRefresh, onToast }: Props) 
   function openAdd() {
     setEditTarget(null);
     setForm(EMPTY);
+    setCandidates([]);
+    setShowDetails(false);
     setOpen(true);
   }
 
@@ -274,11 +307,39 @@ export default function ActivitySection({ records, onRefresh, onToast }: Props) 
       skills: (record.skills ?? []).join(", "),
       result: record.result ?? "",
       description: record.description ?? stripActivityMeta(record.evidence_text),
-      startDate: meta.startDate ?? "",
-      endDate: meta.endDate ?? "",
-      isOngoing: Boolean(meta.isOngoing),
+      startDate: toMonthInput(record.started_at) || meta.startDate || "",
+      endDate: toMonthInput(record.ended_at) || meta.endDate || "",
+      isOngoing: record.started_at ? !record.ended_at : Boolean(meta.isOngoing),
+      implementedFeatures: record.implemented_features ?? "",
+      problemSolved: record.problem_solved ?? "",
+      evidenceUrl: record.evidence_url ?? "",
     });
+    setCandidates(toSkillCandidates(skillsByEvidenceId[record.id] ?? []));
+    setShowDetails(Boolean(record.implemented_features || record.problem_solved || record.evidence_url));
     setOpen(true);
+  }
+
+  async function extractCandidates() {
+    if (!form.title.trim()) return;
+    setExtracting(true);
+    try {
+      const result = await fetchSkillPreview({
+        type: form.type,
+        title: form.title,
+        description: form.description,
+        skills: form.skills,
+        role: form.role,
+        implemented_features: form.implementedFeatures,
+        problem_solved: form.problemSolved,
+        result: form.result,
+        evidence_url: form.evidenceUrl,
+      });
+      setCandidates(result);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "역량 후보 추출 실패", "error");
+    } finally {
+      setExtracting(false);
+    }
   }
 
   function selectOption(option: ActivityOption) {
@@ -304,6 +365,12 @@ export default function ActivitySection({ records, onRefresh, onToast }: Props) 
         result: form.result,
         description: form.description,
         evidence_text: buildEvidenceText(form),
+        implemented_features: form.implementedFeatures,
+        problem_solved: form.problemSolved,
+        evidence_url: form.evidenceUrl,
+        started_at: toDateColumn(form.startDate),
+        ended_at: form.isOngoing ? "" : toDateColumn(form.endDate),
+        confirmedSkills: candidates,
       };
 
       if (editTarget) {
@@ -351,7 +418,7 @@ export default function ActivitySection({ records, onRefresh, onToast }: Props) 
           <div className="grid gap-3">
             {records.map((record) => {
               const option = getDisplayOption(record);
-              const period = formatPeriod(parseActivityMeta(record));
+              const period = getDisplayPeriod(record);
 
               return (
                 <div
@@ -432,6 +499,11 @@ export default function ActivitySection({ records, onRefresh, onToast }: Props) 
                   {record.description ? (
                     <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
                       {record.description}
+                    </p>
+                  ) : null}
+                  {(skillsByEvidenceId[record.id] ?? []).length > 0 ? (
+                    <p className="mt-2 text-xs font-bold text-[var(--navy)]">
+                      확정 역량 {(skillsByEvidenceId[record.id] ?? []).length}개
                     </p>
                   ) : null}
                 </div>
@@ -566,6 +638,53 @@ export default function ActivitySection({ records, onRefresh, onToast }: Props) 
           value={form.skills}
           onChange={(value) => setForm((current) => ({ ...current, skills: value }))}
           placeholder="예: 협업, Java, SQL, 문서화"
+        />
+
+        <button
+          type="button"
+          onClick={() => setShowDetails((prev) => !prev)}
+          className="text-left text-xs font-bold text-[var(--navy)] underline decoration-dotted"
+        >
+          {showDetails ? "상세 정보 접기" : "+ 상세 정보 추가 (구현 기능, 해결한 문제, 증빙 URL)"}
+        </button>
+
+        {showDetails ? (
+          <div className="grid gap-3 rounded-2xl border border-dashed border-[var(--line)] p-4">
+            <label className="grid gap-1.5">
+              <span className="text-xs font-extrabold text-slate-600">구현 기능</span>
+              <textarea
+                value={form.implementedFeatures}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, implementedFeatures: event.target.value }))
+                }
+                rows={2}
+                className="rounded-2xl border border-[var(--line)] px-4 py-3 text-sm outline-none focus:border-[var(--navy)]"
+              />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs font-extrabold text-slate-600">해결한 문제</span>
+              <textarea
+                value={form.problemSolved}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, problemSolved: event.target.value }))
+                }
+                rows={2}
+                className="rounded-2xl border border-[var(--line)] px-4 py-3 text-sm outline-none focus:border-[var(--navy)]"
+              />
+            </label>
+            <Input
+              label="증빙 URL"
+              value={form.evidenceUrl}
+              onChange={(value) => setForm((current) => ({ ...current, evidenceUrl: value }))}
+            />
+          </div>
+        ) : null}
+
+        <SkillCandidateReview
+          candidates={candidates}
+          onChange={setCandidates}
+          onRegenerate={() => void extractCandidates()}
+          isRegenerating={extracting}
         />
       </Modal>
     </>

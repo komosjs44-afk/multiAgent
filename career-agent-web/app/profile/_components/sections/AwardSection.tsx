@@ -2,43 +2,127 @@
 
 import { useState } from "react";
 
-import { deleteRecord, postJson, updateEvidence } from "../apiUtils";
+import { deleteRecord, fetchSkillPreview, postJson, toSkillCandidates, updateEvidence } from "../apiUtils";
 import EmptyState from "../shared/EmptyState";
 import Modal from "../shared/Modal";
 import SectionCard from "../shared/SectionCard";
-import type { EvidenceRecord } from "@/types/career";
+import SkillCandidateReview from "../shared/SkillCandidateReview";
+import type { EvidenceRecord, EvidenceSkillCandidate, EvidenceSkillRow } from "@/types/career";
 
 type Props = {
   records: EvidenceRecord[];
+  skillsByEvidenceId: Record<string, EvidenceSkillRow[]>;
   onRefresh: () => void;
   onToast: (msg: string, type: "success" | "error") => void;
 };
 
-type FormState = { title: string; organization: string; role: string; skills: string; result: string; description: string };
-const EMPTY: FormState = { title: "", organization: "", role: "", skills: "", result: "", description: "" };
+type FormState = {
+  title: string;
+  organization: string;
+  role: string;
+  skills: string;
+  result: string;
+  description: string;
+  implementedFeatures: string;
+  problemSolved: string;
+  evidenceUrl: string;
+  startedAt: string;
+  endedAt: string;
+};
+const EMPTY: FormState = {
+  title: "",
+  organization: "",
+  role: "",
+  skills: "",
+  result: "",
+  description: "",
+  implementedFeatures: "",
+  problemSolved: "",
+  evidenceUrl: "",
+  startedAt: "",
+  endedAt: "",
+};
 
-export default function AwardSection({ records, onRefresh, onToast }: Props) {
+export default function AwardSection({ records, skillsByEvidenceId, onRefresh, onToast }: Props) {
   const [open, setOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<EvidenceRecord | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const [candidates, setCandidates] = useState<EvidenceSkillCandidate[]>([]);
+  const [extracting, setExtracting] = useState(false);
 
-  function openAdd() { setEditTarget(null); setForm(EMPTY); setOpen(true); }
+  function openAdd() {
+    setEditTarget(null);
+    setForm(EMPTY);
+    setCandidates([]);
+    setShowDetails(false);
+    setOpen(true);
+  }
 
   function openEdit(rec: EvidenceRecord) {
     setEditTarget(rec);
-    setForm({ title: rec.title, organization: rec.organization ?? "", role: rec.role ?? "",
-      skills: (rec.skills ?? []).join(", "), result: rec.result ?? "", description: rec.description ?? "" });
+    setForm({
+      title: rec.title,
+      organization: rec.organization ?? "",
+      role: rec.role ?? "",
+      skills: (rec.skills ?? []).join(", "),
+      result: rec.result ?? "",
+      description: rec.description ?? "",
+      implementedFeatures: rec.implemented_features ?? "",
+      problemSolved: rec.problem_solved ?? "",
+      evidenceUrl: rec.evidence_url ?? "",
+      startedAt: rec.started_at ?? "",
+      endedAt: rec.ended_at ?? "",
+    });
+    setCandidates(toSkillCandidates(skillsByEvidenceId[rec.id] ?? []));
+    setShowDetails(Boolean(rec.implemented_features || rec.problem_solved || rec.evidence_url));
     setOpen(true);
+  }
+
+  async function extractCandidates() {
+    if (!form.title.trim()) return;
+    setExtracting(true);
+    try {
+      const result = await fetchSkillPreview({
+        type: "award",
+        title: form.title,
+        description: form.description,
+        skills: form.skills,
+        role: form.role,
+        implemented_features: form.implementedFeatures,
+        problem_solved: form.problemSolved,
+        result: form.result,
+        evidence_url: form.evidenceUrl,
+      });
+      setCandidates(result);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "역량 후보 추출 실패", "error");
+    } finally {
+      setExtracting(false);
+    }
   }
 
   async function handleSave() {
     if (!form.title.trim()) return;
     setSaving(true);
     try {
-      const payload = { type: "award", title: form.title.trim(), organization: form.organization,
-        role: form.role, skills: form.skills, result: form.result, description: form.description };
+      const payload = {
+        type: "award",
+        title: form.title.trim(),
+        organization: form.organization,
+        role: form.role,
+        skills: form.skills,
+        result: form.result,
+        description: form.description,
+        implemented_features: form.implementedFeatures,
+        problem_solved: form.problemSolved,
+        evidence_url: form.evidenceUrl,
+        started_at: form.startedAt,
+        ended_at: form.endedAt,
+        confirmedSkills: candidates,
+      };
       if (editTarget) {
         await updateEvidence(editTarget.id, payload);
       } else {
@@ -101,6 +185,9 @@ export default function AwardSection({ records, onRefresh, onToast }: Props) {
                   </div>
                 ) : null}
                 {rec.result ? <p className="mt-2 text-xs font-bold text-emerald-700">🏆 {rec.result}</p> : null}
+                {(skillsByEvidenceId[rec.id] ?? []).length > 0 ? (
+                  <p className="mt-2 text-xs font-bold text-[var(--navy)]">확정 역량 {(skillsByEvidenceId[rec.id] ?? []).length}개</p>
+                ) : null}
               </div>
             ))}
           </div>
@@ -150,6 +237,61 @@ export default function AwardSection({ records, onRefresh, onToast }: Props) {
             placeholder="어떤 아이디어로, 무엇을 구현했는지" rows={3}
             className="rounded-2xl border border-[var(--line)] px-4 py-3 text-sm outline-none focus:border-[var(--navy)]" />
         </label>
+
+        <button
+          type="button"
+          onClick={() => setShowDetails((prev) => !prev)}
+          className="text-left text-xs font-bold text-[var(--navy)] underline decoration-dotted"
+        >
+          {showDetails ? "상세 정보 접기" : "+ 상세 정보 추가 (역할, 구현 기능, 해결한 문제, 증빙 URL, 기간)"}
+        </button>
+
+        {showDetails ? (
+          <div className="grid gap-3 rounded-2xl border border-dashed border-[var(--line)] p-4">
+            <label className="grid gap-1.5">
+              <span className="text-xs font-extrabold text-slate-600">내 역할</span>
+              <input type="text" value={form.role} onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
+                placeholder="예) 팀장, 데이터 분석 담당"
+                className="h-11 rounded-2xl border border-[var(--line)] px-4 text-sm outline-none focus:border-[var(--navy)]" />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs font-extrabold text-slate-600">구현 기능</span>
+              <textarea value={form.implementedFeatures} onChange={(e) => setForm((p) => ({ ...p, implementedFeatures: e.target.value }))}
+                rows={2}
+                className="rounded-2xl border border-[var(--line)] px-4 py-3 text-sm outline-none focus:border-[var(--navy)]" />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs font-extrabold text-slate-600">해결한 문제</span>
+              <textarea value={form.problemSolved} onChange={(e) => setForm((p) => ({ ...p, problemSolved: e.target.value }))}
+                rows={2}
+                className="rounded-2xl border border-[var(--line)] px-4 py-3 text-sm outline-none focus:border-[var(--navy)]" />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs font-extrabold text-slate-600">증빙 URL</span>
+              <input type="text" value={form.evidenceUrl} onChange={(e) => setForm((p) => ({ ...p, evidenceUrl: e.target.value }))}
+                className="h-11 rounded-2xl border border-[var(--line)] px-4 text-sm outline-none focus:border-[var(--navy)]" />
+            </label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="grid gap-1.5">
+                <span className="text-xs font-extrabold text-slate-600">시작일</span>
+                <input type="date" value={form.startedAt} onChange={(e) => setForm((p) => ({ ...p, startedAt: e.target.value }))}
+                  className="h-11 rounded-2xl border border-[var(--line)] px-4 text-sm outline-none focus:border-[var(--navy)]" />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-extrabold text-slate-600">종료일</span>
+                <input type="date" value={form.endedAt} onChange={(e) => setForm((p) => ({ ...p, endedAt: e.target.value }))}
+                  className="h-11 rounded-2xl border border-[var(--line)] px-4 text-sm outline-none focus:border-[var(--navy)]" />
+              </label>
+            </div>
+          </div>
+        ) : null}
+
+        <SkillCandidateReview
+          candidates={candidates}
+          onChange={setCandidates}
+          onRegenerate={() => void extractCandidates()}
+          isRegenerating={extracting}
+        />
       </Modal>
     </>
   );

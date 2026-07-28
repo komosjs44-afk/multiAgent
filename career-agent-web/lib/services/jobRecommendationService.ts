@@ -2,9 +2,10 @@ import {
   buildUserProfile,
 } from "@/lib/userProfileBuilder";
 import { recommendJobs } from "@/lib/careerAgent";
+import { isDemoMode } from "@/lib/demo/config";
 import { createStableJobKey } from "@/lib/jobRecommendationKey";
 import { fetchJobPostingsWithDebug } from "@/lib/jobPostings";
-import { getAcademicRecords, getEvidenceRecords, getJobDescriptions, getProfile, hasSupabaseServiceRoleKey } from "@/lib/supabase/server";
+import { getAcademicRecords, getEvidenceRecords, getEvidenceSkills, getJobDescriptions, getProfile, hasSupabaseServiceRoleKey } from "@/lib/supabase/server";
 import type { JobPosting, JobRecommendation, UserProfile } from "@/types/career";
 
 const DEFAULT_LIMIT = 20;
@@ -48,6 +49,9 @@ type JobRecommendationResponseItem = {
   missingSkills: string[];
   recommendedCertificates: string[];
   boostRoutine: string[];
+  fetchedAt: string | null;
+  isFallback: boolean;
+  isDemo: boolean;
 };
 
 export type JobRecommendationsMeta = {
@@ -177,6 +181,8 @@ function mapJobDescriptionToPosting(row: JobDescriptionRow): JobPosting {
     qualifications: toArray(row.qualifications),
     preferredCertificates: toArray(row.preferred_certificates),
     matchedKeywords: requiredSkills,
+    isFallback: false,
+    isDemo: isDemoMode(),
   } as unknown as JobPosting;
 }
 
@@ -289,6 +295,9 @@ function mapRecommendationToResponseItem(
     missingSkills: recommendation.missingSkills,
     recommendedCertificates: recommendation.recommendedCertificates,
     boostRoutine: recommendation.boostRoutine,
+    fetchedAt: typeof postingAny.fetchedAt === "string" ? postingAny.fetchedAt : null,
+    isFallback: postingAny.isFallback === true,
+    isDemo: postingAny.isDemo === true,
   };
 }
 
@@ -362,16 +371,18 @@ export async function getJobRecommendations(userId: string, rawLimit = DEFAULT_L
   let jobPostingDebug: JobPostingDebug | undefined;
 
   try {
-    const [profileRow, academicRows, evidenceRows] = await Promise.all([
+    const [profileRow, academicRows, evidenceRows, evidenceSkillRows] = await Promise.all([
       getProfile(userId),
       getAcademicRecords(userId),
       getEvidenceRecords(userId),
+      getEvidenceSkills(userId),
     ]);
 
     const userProfile = buildUserProfile({
       profile: profileRow as never,
       academic: academicRows as never,
       evidence: evidenceRows as never,
+      confirmedSkillRows: evidenceSkillRows as never,
     });
 
     const jobDescriptionRows = (await getJobDescriptions(200)) as JobDescriptionRow[];

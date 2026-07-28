@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { getJobRecommendations } from "@/lib/services/jobRecommendationService";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUserId } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+  const userId = await getCurrentUserId();
 
-  if (authError || !user) {
+  if (!userId) {
     return NextResponse.json(
       {
         ok: false,
@@ -28,7 +24,7 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const bodyLimit = typeof body?.limit === "number" ? body.limit : undefined;
 
-  const result = await getJobRecommendations(user.id, bodyLimit ?? queryLimit);
+  const result = await getJobRecommendations(userId, bodyLimit ?? queryLimit);
   const status = result.ok ? 200 : result.error.code === "NO_JOB_MATCH_FOUND" ? 404 : 500;
 
   return NextResponse.json(result, { status });

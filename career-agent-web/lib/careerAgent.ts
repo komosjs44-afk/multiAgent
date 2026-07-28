@@ -607,35 +607,18 @@ export function recommendJobs(
       );
       const matchedSkills = getMatchedSkills(evidenceText, requiredSkills);
       const missingSkills = getMissingSkills(evidenceText, requiredSkills);
-      const certMatches = posting.preferredCertificates.filter((certificate) =>
-        normalize(certText).includes(normalize(certificate)),
-      );
       const certGaps = posting.preferredCertificates.filter(
         (certificate) => !normalize(certText).includes(normalize(certificate)),
       );
       const postingText = `${posting.title} ${posting.organization} ${posting.description}`;
       const isTargetCompanyPosting =
         targetAliases.length > 0 && includesAny(postingText, targetAliases);
-      const skillScore = requiredSkills.length
-        ? (matchedSkills.length / requiredSkills.length) * 50
-        : 20;
-      const certScore = posting.preferredCertificates.length
-        ? (certMatches.length / posting.preferredCertificates.length) * 12
-        : 3;
       const publicItSignal = includesAny(
         postingText,
         [profile.career, "공기업", "공공기관", "전산", "정보시스템", "it"],
       )
         ? 8
         : 0;
-      const targetCompanyBonus = isTargetCompanyPosting ? 18 : 0;
-      const missingPenalty = Math.min(missingSkills.length * 4, 16);
-      const noCoreCertificatePenalty = includesAny(certText, ["정보처리기사", "SQLD", "정보보안기사"])
-        ? 0
-        : 8;
-      const fitScore = clampScore(
-        skillScore + certScore + publicItSignal + targetCompanyBonus - missingPenalty - noCoreCertificatePenalty,
-      );
       const scoreBreakdown = makeJobScoreBreakdown({
         evidenceText,
         certificatesText: certText,

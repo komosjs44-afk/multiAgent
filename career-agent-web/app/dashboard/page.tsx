@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
+import { isDemoMode } from "@/lib/demo/config";
 import { isCareerAnalysis } from "@/lib/validation";
 import type { AnalysisHistoryRow, CareerAnalysis } from "@/types/career";
 
@@ -42,12 +43,12 @@ export default function DashboardPage() {
     let ignore = false;
 
     async function loadHistory() {
-      if (!isSupabaseConfigured()) {
-        setIsLoading(false);
-        return;
-      }
+      if (!isDemoMode()) {
+        if (!isSupabaseConfigured()) {
+          setIsLoading(false);
+          return;
+        }
 
-      try {
         const supabase = createClient();
         const {
           data: { user },
@@ -57,7 +58,9 @@ export default function DashboardPage() {
           setIsLoading(false);
           return;
         }
+      }
 
+      try {
         const response = await fetch("/api/analysis-history", {
           cache: "no-store",
         });
@@ -128,6 +131,12 @@ export default function DashboardPage() {
             </Link>
           </div>
         </header>
+
+        {isDemoMode() ? (
+          <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+            데모 모드로 표시 중입니다. 실제 Supabase 데이터가 아닌 고정 데모 데이터입니다.
+          </p>
+        ) : null}
 
         {isLoading ? (
           <InfoBox text="분석 히스토리를 불러오는 중입니다." />

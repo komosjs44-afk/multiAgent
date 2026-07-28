@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
-import type { AcademicRecord, CareerProfileRecord, EvidenceRecord } from "@/types/career";
+import { isDemoMode } from "@/lib/demo/config";
+import type { AcademicRecord, CareerProfileRecord, EvidenceRecord, EvidenceSkillRow } from "@/types/career";
 import ActivitySection from "./_components/sections/ActivitySection";
 import AwardSection from "./_components/sections/AwardSection";
 import BasicInfoSection from "./_components/sections/BasicInfoSection";
@@ -21,7 +22,16 @@ type PageData = {
   profile: CareerProfileRecord | null;
   academic: AcademicRecord[];
   evidence: EvidenceRecord[];
+  skillsByEvidenceId: Record<string, EvidenceSkillRow[]>;
 };
+
+function groupSkillsByEvidenceId(rows: EvidenceSkillRow[]): Record<string, EvidenceSkillRow[]> {
+  const grouped: Record<string, EvidenceSkillRow[]> = {};
+  for (const row of rows) {
+    (grouped[row.evidence_id] ??= []).push(row);
+  }
+  return grouped;
+}
 
 type ToastState = { message: string; type: "success" | "error" } | null;
 type TabKey = "quick" | "academic" | "certs" | "projects" | "awards" | "activities" | "scores";
@@ -80,7 +90,12 @@ const TABS: TabDef[] = [
 
 export default function ProfilePage() {
   const router = useRouter();
-  const [data, setData] = useState<PageData>({ profile: null, academic: [], evidence: [] });
+  const [data, setData] = useState<PageData>({
+    profile: null,
+    academic: [],
+    evidence: [],
+    skillsByEvidenceId: {},
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
@@ -91,28 +106,31 @@ export default function ProfilePage() {
     const [profilePayload, academicPayload, evidencePayload] = await Promise.all([
       getJson<{ data?: CareerProfileRecord | null }>("/api/career-profile"),
       getJson<{ data?: AcademicRecord[] }>("/api/academic-records"),
-      getJson<{ data?: EvidenceRecord[] }>("/api/evidence-records"),
+      getJson<{ data?: EvidenceRecord[]; skills?: EvidenceSkillRow[] }>("/api/evidence-records"),
     ]);
     setData({
       profile: profilePayload.data ?? null,
       academic: academicPayload.data ?? [],
       evidence: evidencePayload.data ?? [],
+      skillsByEvidenceId: groupSkillsByEvidenceId(evidencePayload.skills ?? []),
     });
   }, []);
 
   useEffect(() => {
     async function init() {
-      if (!isSupabaseConfigured()) {
-        router.replace("/login");
-        return;
-      }
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        router.replace("/login");
-        return;
+      if (!isDemoMode()) {
+        if (!isSupabaseConfigured()) {
+          router.replace("/login");
+          return;
+        }
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) {
+          router.replace("/login");
+          return;
+        }
       }
       try {
         await loadData();
@@ -223,6 +241,11 @@ export default function ProfilePage() {
           {loadError ? (
             <p className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
               {loadError}
+            </p>
+          ) : null}
+          {isDemoMode() ? (
+            <p className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+              데모 모드로 표시 중입니다. 실제 Supabase 데이터가 아닌 고정 데모 데이터입니다.
             </p>
           ) : null}
           <header className="mb-6">
@@ -372,14 +395,25 @@ export default function ProfilePage() {
             <CertSection records={certs} onRefresh={onRefresh} onToast={showToast} />
           )}
           {activeTab === "projects" && (
-            <ProjectSection records={projects} onRefresh={onRefresh} onToast={showToast} />
+            <ProjectSection
+              records={projects}
+              skillsByEvidenceId={data.skillsByEvidenceId}
+              onRefresh={onRefresh}
+              onToast={showToast}
+            />
           )}
           {activeTab === "awards" && (
-            <AwardSection records={awards} onRefresh={onRefresh} onToast={showToast} />
+            <AwardSection
+              records={awards}
+              skillsByEvidenceId={data.skillsByEvidenceId}
+              onRefresh={onRefresh}
+              onToast={showToast}
+            />
           )}
           {activeTab === "activities" && (
             <ActivitySection
               records={activities}
+              skillsByEvidenceId={data.skillsByEvidenceId}
               onRefresh={onRefresh}
               onToast={showToast}
             />

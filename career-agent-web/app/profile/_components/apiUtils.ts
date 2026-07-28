@@ -47,3 +47,32 @@ export async function getJson<T>(path: string): Promise<T> {
   }
   return (await res.json()) as T;
 }
+
+export function toSkillCandidates(
+  rows: import("@/types/career").EvidenceSkillRow[],
+): import("@/types/career").EvidenceSkillCandidate[] {
+  return rows.map((row) => ({
+    skillCode: row.skill_code,
+    contributionLevel: row.contribution_level,
+    confidence: row.confidence,
+    matchedKeywords: row.matched_keywords,
+    reason: row.reason ?? "",
+    source: row.source,
+  }));
+}
+
+export async function fetchSkillPreview(
+  body: Record<string, unknown>,
+): Promise<import("@/types/career").EvidenceSkillCandidate[]> {
+  const res = await fetch("/api/evidence/skill-preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? "역량 후보 추출에 실패했습니다.");
+  }
+  const payload = (await res.json()) as { data: import("@/types/career").EvidenceSkillCandidate[] };
+  return payload.data;
+}

@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { isDemoMode } from "@/lib/demo/config";
+import { demoJobPostings } from "@/lib/demo/jobPostings";
 import type { JobPosting, UserProfile } from "@/types/career";
 
 type UnknownRecord = Record<string, unknown>;
@@ -26,60 +28,6 @@ const PUBLIC_IT_TERMS = [
   "프로그래밍",
 ];
 const NON_IT_TERMS = ["의사", "간호", "의료", "보건", "약사", "임상", "병동"];
-
-const removedLegacyMockPostings: JobPosting[] = [
-  {
-    id: "demo-public-it-001",
-    title: "공공기관 전산직 신입",
-    organization: "데모 공고 - API 미연결",
-    source: "removed_legacy_mock",
-    sourceStatus: "DEMO",
-    deadline: "상시 확인 필요",
-    location: "전국/본사",
-    employmentType: "정규직",
-    description:
-      "정보시스템 운영, DB 관리, 보안 점검, 네트워크 장애 대응, 전산 행정 문서 작성 역량을 요구하는 전산직 공고 예시입니다.",
-    rawText:
-      "데모 공고입니다. 실제 API 데이터가 아니며, 정보시스템 운영, DB 관리, 보안 점검, 네트워크 장애 대응, 전산 행정 문서 작성 역량을 요구하는 전산직 공고 예시입니다.",
-    requiredSkills: ["DB", "운영체제", "네트워크", "보안", "Linux", "문서화"],
-    preferredCertificates: ["정보처리기사", "SQLD", "컴퓨터활용능력"],
-    requiredExperience: "신입 또는 관련 프로젝트 경험",
-  },
-  {
-    id: "demo-public-it-002",
-    title: "공공 IT 시스템 운영 및 정보보안 담당",
-    organization: "데모 공고 - API 미연결",
-    source: "removed_legacy_mock",
-    sourceStatus: "DEMO",
-    deadline: "상시 확인 필요",
-    location: "수도권",
-    employmentType: "계약직/정규직 전환 가능",
-    description:
-      "서버 운영, 로그 분석, 취약점 점검, 클라우드 기초, 장애 보고서 작성 능력을 요구하는 공고 예시입니다.",
-    rawText:
-      "데모 공고입니다. 실제 API 데이터가 아니며, 서버 운영, 로그 분석, 취약점 점검, 클라우드 기초, 장애 보고서 작성 능력을 요구하는 공고 예시입니다.",
-    requiredSkills: ["Linux", "시스템 운영", "보안", "클라우드", "네트워크", "보고서 작성"],
-    preferredCertificates: ["정보처리기사", "정보보안기사", "네트워크관리사"],
-    requiredExperience: "운영 자동화 또는 보안 실습 경험 우대",
-  },
-  {
-    id: "demo-public-it-003",
-    title: "데이터/행정 시스템 개발 보조",
-    organization: "데모 공고 - API 미연결",
-    source: "removed_legacy_mock",
-    sourceStatus: "DEMO",
-    deadline: "상시 확인 필요",
-    location: "지역 제한 확인 필요",
-    employmentType: "청년인턴",
-    description:
-      "SQL 기반 데이터 처리, 간단한 웹 기능 개발, API 연동, 산출물 정리 능력을 요구하는 인턴 공고 예시입니다.",
-    rawText:
-      "데모 공고입니다. 실제 API 데이터가 아니며, SQL 기반 데이터 처리, 간단한 웹 기능 개발, API 연동, 산출물 정리 능력을 요구하는 인턴 공고 예시입니다.",
-    requiredSkills: ["SQL", "API", "Python", "DB", "문서화"],
-    preferredCertificates: ["SQLD", "정보처리기사"],
-    requiredExperience: "개발 프로젝트 경험 우대",
-  },
-];
 
 function getString(record: UnknownRecord, keys: string[]) {
   for (const key of keys) {
@@ -423,11 +371,6 @@ async function fetchAlioJsonPostingsDetailed(profile: UserProfile) {
   };
 }
 
-async function fetchAlioJsonPostings(profile: UserProfile) {
-  const result = await fetchAlioJsonPostingsDetailed(profile);
-  return result.postings;
-}
-
 function filterAlioItems(items: UnknownRecord[], profile: UserProfile) {
   const keyword = getSearchKeyword(profile);
   const terms = Array.from(new Set([keyword, ...PUBLIC_IT_TERMS])).filter(Boolean);
@@ -619,34 +562,18 @@ function decodeHtmlEntities(value: string) {
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
 }
 
+type PostingMeta = { fetchedAt: string; isFallback: boolean; isDemo: boolean };
+
+function withMeta(postings: JobPosting[], meta: PostingMeta): JobPosting[] {
+  return postings.map((posting) => ({ ...posting, ...meta }));
+}
+
+// 서버 프로세스 생존 기간 동안만 유지되는 마지막 정상 응답 캐시입니다.
+// 재배포·재시작 시 초기화되며, 영속 캐시가 필요하면 별도 설계가 필요합니다.
+let lastGoodPostingsCache: { postings: JobPosting[]; fetchedAt: string } | null = null;
+
 export async function fetchJobPostings(profile: UserProfile): Promise<JobPosting[]> {
-  const configuredUrl = makeConfiguredOpenApiUrl(profile);
-
-  let livePostings: JobPosting[] = [];
-
-  try {
-    livePostings = await fetchAlioJsonPostings(profile);
-  } catch {
-    livePostings = [];
-  }
-
-  if (configuredUrl) {
-    try {
-      livePostings = livePostings.length ? livePostings : await fetchJsonPostings(configuredUrl);
-    } catch {
-      livePostings = livePostings.length ? livePostings : [];
-    }
-  }
-
-  if (!livePostings.length) {
-    try {
-      livePostings = await fetchJobAlioHtmlPostings(profile);
-    } catch {
-      livePostings = [];
-    }
-  }
-
-  const postings = uniqueById(livePostings).slice(0, 30);
+  const { postings } = await fetchJobPostingsWithDebug(profile);
   return postings;
 }
 
@@ -660,9 +587,30 @@ export async function fetchJobPostingsWithDebug(profile: UserProfile): Promise<{
     jobAlioHtmlReadCount: number;
     returnedCount: number;
     usedFallback: boolean;
+    fallbackTier: "live" | "cache" | "demo";
+    fetchedAt: string;
   };
   warnings: string[];
 }> {
+  if (isDemoMode()) {
+    const fetchedAt = new Date().toISOString();
+    return {
+      postings: withMeta(demoJobPostings, { fetchedAt, isFallback: true, isDemo: true }),
+      debug: {
+        alioRawCount: 0,
+        alioFilteredCount: 0,
+        alioReadCount: 0,
+        configuredApiReadCount: 0,
+        jobAlioHtmlReadCount: 0,
+        returnedCount: demoJobPostings.length,
+        usedFallback: true,
+        fallbackTier: "demo",
+        fetchedAt,
+      },
+      warnings: [],
+    };
+  }
+
   const configuredUrl = makeConfiguredOpenApiUrl(profile);
   const warnings: string[] = [];
   let livePostings: JobPosting[] = [];
@@ -701,7 +649,31 @@ export async function fetchJobPostingsWithDebug(profile: UserProfile): Promise<{
     }
   }
 
-  const postings = uniqueById(livePostings).slice(0, 30);
+  const liveResult = uniqueById(livePostings).slice(0, 30);
+
+  let postings: JobPosting[];
+  let fallbackTier: "live" | "cache" | "demo";
+  let fetchedAt: string;
+
+  if (liveResult.length > 0) {
+    fetchedAt = new Date().toISOString();
+    fallbackTier = "live";
+    lastGoodPostingsCache = { postings: liveResult, fetchedAt };
+    postings = withMeta(liveResult, { fetchedAt, isFallback: false, isDemo: false });
+  } else if (lastGoodPostingsCache) {
+    fallbackTier = "cache";
+    fetchedAt = lastGoodPostingsCache.fetchedAt;
+    warnings.push(
+      `실 API 응답이 없어 ${fetchedAt} 기준 마지막 정상 캐시 데이터를 대신 반환합니다.`,
+    );
+    postings = withMeta(lastGoodPostingsCache.postings, { fetchedAt, isFallback: true, isDemo: false });
+  } else {
+    fallbackTier = "demo";
+    fetchedAt = new Date().toISOString();
+    warnings.push("실 API 응답과 캐시가 모두 없어 데모 공고 데이터를 대신 반환합니다.");
+    postings = withMeta(demoJobPostings, { fetchedAt, isFallback: true, isDemo: true });
+  }
+
   return {
     postings,
     debug: {
@@ -711,7 +683,9 @@ export async function fetchJobPostingsWithDebug(profile: UserProfile): Promise<{
       configuredApiReadCount,
       jobAlioHtmlReadCount,
       returnedCount: postings.length,
-      usedFallback: false,
+      usedFallback: fallbackTier !== "live",
+      fallbackTier,
+      fetchedAt,
     },
     warnings,
   };
