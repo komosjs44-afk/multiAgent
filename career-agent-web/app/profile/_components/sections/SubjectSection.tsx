@@ -1,40 +1,26 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { patchJson, postJson } from "../apiUtils";
+import { getJson, patchJson, postJson } from "../apiUtils";
 import EmptyState from "../shared/EmptyState";
 import Modal from "../shared/Modal";
 import SectionCard from "../shared/SectionCard";
-import type { AcademicRecord } from "@/types/career";
+import {
+  computeCourseAggregate,
+  getCategory,
+  getCourseCode,
+  type CleanupPreview,
+} from "@/lib/academicSummary";
+import { CORE_MAJOR_SUBJECTS, compareSemesters } from "@/lib/transcriptParser";
+import type { AcademicRecord, SemesterSummaryRecord, TranscriptVersion } from "@/types/career";
 
-const CORE_SUBJECTS = [
-  "자료구조",
-  "운영체제",
-  "데이터베이스",
-  "네트워크",
-  "컴퓨터구조",
-  "알고리즘",
-  "보안",
-  "소프트웨어공학",
-];
-
-const CATEGORY_VALUES = new Set([
-  "교필",
-  "교선",
-  "계공",
-  "전공",
-  "전필",
-  "전선",
-  "일선",
-  "기전",
-  "복수",
-  "부전",
-  "마전",
-]);
+const CORE_SUBJECTS = CORE_MAJOR_SUBJECTS;
 
 type Props = {
   records: AcademicRecord[];
+  activeVersion: TranscriptVersion | null;
+  semesterSummaries: SemesterSummaryRecord[];
   onRefresh: () => void;
   onToast: (msg: string, type: "success" | "error") => void;
 };
@@ -56,14 +42,6 @@ const EMPTY_FORM: FormState = {
   courseCode: "",
   category: "",
 };
-
-function getCourseCode(record: AcademicRecord) {
-  return record.skill_mapping.find((item) => /^[A-Z]{1,5}\d{2,4}[A-Z0-9]*$/.test(item));
-}
-
-function getCategory(record: AcademicRecord) {
-  return record.skill_mapping.find((item) => CATEGORY_VALUES.has(item));
-}
 
 function getRecordKey(record: AcademicRecord) {
   const semester = record.semester?.trim() || "학기 미분류";
@@ -89,18 +67,15 @@ function groupCoursesBySemester(records: AcademicRecord[]) {
   }, {});
 }
 
-function sortSemesters(a: string, b: string) {
-  if (a === "학기 미분류") return 1;
-  if (b === "학기 미분류") return -1;
-  return a.localeCompare(b, "ko");
-}
-
 function checkCoreSubjectCoverage(records: AcademicRecord[]) {
-  const courseText = records.map((record) => record.course_name).join(" ");
-  return CORE_SUBJECTS.map((subject) => ({
-    subject,
-    fulfilled: courseText.includes(subject),
-  }));
+  return CORE_SUBJECTS.map((subject) => {
+    const match = records.find((record) => record.course_name.includes(subject));
+    return {
+      subject,
+      fulfilled: Boolean(match),
+      grade: match?.grade || "",
+    };
+  });
 }
 
 function formFromRecord(record: AcademicRecord): FormState {
@@ -114,13 +89,55 @@ function formFromRecord(record: AcademicRecord): FormState {
   };
 }
 
-export default function SubjectSection({ records, onRefresh, onToast }: Props) {
+function formatAcademicTerm(term: string) {
+  const match = term.match(/^(\d{4})-(\d)$/);
+  if (!match) return term || "반영 학기 미확인";
+  return `${match[1]}년 ${match[2]}학기 반영본`;
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleDateString("ko-KR");
+}
+
+type EditRow = {
+  courseName: string;
+  credit: string;
+  grade: string;
+  category: string;
+  courseCode: string;
+};
+
+export default function SubjectSection({ records, activeVersion, semesterSummaries, onRefresh, onToast }: Props) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [editTarget, setEditTarget] = useState<AcademicRecord | null>(null);
   const [locallyDeletedIds, setLocallyDeletedIds] = useState<string[]>([]);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [sortDirection, setSortDirection] = useState<"desc" | "asc">("desc");
+  const [editingSemester, setEditingSemester] = useState<string | null>(null);
+  const [editRows, setEditRows] = useState<Record<string, EditRow>>({});
+  const [savingSemester, setSavingSemester] = useState(false);
+  const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null);
+  const [cleanupModalOpen, setCleanupModalOpen] = useState(false);
+  const [cleanupDeleting, setCleanupDeleting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getJson<CleanupPreview>("/api/academic-records/cleanup")
+      .then((preview) => {
+        if (!cancelled) setCleanupPreview(preview);
+      })
+      .catch(() => {
+        // 정리 미리보기는 부가 기능이므로 실패해도 화면 표시를 막지 않습니다.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [records]);
 
   const visibleRecords = useMemo(
     () => dedupeRecords(records.filter((record) => !locallyDeletedIds.includes(record.id))),
@@ -128,11 +145,24 @@ export default function SubjectSection({ records, onRefresh, onToast }: Props) {
   );
   const grouped = useMemo(() => groupCoursesBySemester(visibleRecords), [visibleRecords]);
   const coverage = useMemo(() => checkCoreSubjectCoverage(visibleRecords), [visibleRecords]);
-  const semesterKeys = Object.keys(grouped).sort(sortSemesters);
+  const fallbackSummary = useMemo(() => computeCourseAggregate(visibleRecords), [visibleRecords]);
+  const semesterKeys = useMemo(() => {
+    const keys = Object.keys(grouped).sort(compareSemesters);
+    return sortDirection === "desc" ? keys.reverse() : keys;
+  }, [grouped, sortDirection]);
+  const hasRawDuplicates = records.length > visibleRecords.length;
+  const semesterSummaryByKey = useMemo(
+    () => new Map(semesterSummaries.map((row) => [row.semester, row])),
+    [semesterSummaries],
+  );
 
-  function openAdd() {
+  const totalCredits = activeVersion?.total_credits ?? (fallbackSummary.totalCredits || null);
+  const averageGpa = activeVersion?.cumulative_gpa ?? fallbackSummary.averageGpa;
+  const courseCount = activeVersion?.total_course_count ?? fallbackSummary.courseCount;
+
+  function openAdd(semester = "") {
     setEditTarget(null);
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, semester });
     setOpen(true);
   }
 
@@ -163,11 +193,9 @@ export default function SubjectSection({ records, onRefresh, onToast }: Props) {
       credit: form.credit,
       grade: form.grade,
       semester,
-      skill_mapping: [
-        form.category.trim(),
-        form.courseCode.trim(),
-        courseName,
-      ].filter(Boolean),
+      course_code: form.courseCode.trim(),
+      category: form.category.trim(),
+      skill_mapping: [form.category.trim(), form.courseCode.trim(), courseName].filter(Boolean),
     };
 
     setSaving(true);
@@ -211,87 +239,345 @@ export default function SubjectSection({ records, onRefresh, onToast }: Props) {
     }
   }
 
+  async function handleDeleteAll() {
+    setDeletingAll(true);
+    try {
+      const res = await fetch("/api/academic-records?all=true", { method: "DELETE" });
+      if (!res.ok) {
+        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "전체 삭제에 실패했습니다.");
+      }
+      onRefresh();
+      onToast("모든 성적 데이터를 삭제했습니다.", "success");
+      setConfirmDeleteAll(false);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "전체 삭제에 실패했습니다.", "error");
+    } finally {
+      setDeletingAll(false);
+    }
+  }
+
+  async function handleCleanupDelete() {
+    setCleanupDeleting(true);
+    try {
+      const res = await fetch("/api/academic-records/cleanup?confirm=true", { method: "DELETE" });
+      const payload = (await res.json().catch(() => null)) as { deletedCount?: number; error?: string } | null;
+      if (!res.ok) {
+        throw new Error(payload?.error ?? "정리 삭제에 실패했습니다.");
+      }
+      onRefresh();
+      onToast(`정리 대상 ${payload?.deletedCount ?? 0}건을 삭제했습니다.`, "success");
+      setCleanupModalOpen(false);
+      setCleanupPreview(null);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "정리 삭제에 실패했습니다.", "error");
+    } finally {
+      setCleanupDeleting(false);
+    }
+  }
+
+  function startEditSemester(semester: string, semesterRecords: AcademicRecord[]) {
+    const rows: Record<string, EditRow> = {};
+    for (const record of semesterRecords) {
+      rows[record.id] = {
+        courseName: record.course_name,
+        credit: record.credit == null ? "" : String(record.credit),
+        grade: record.grade ?? "",
+        category: getCategory(record) ?? "",
+        courseCode: getCourseCode(record) ?? "",
+      };
+    }
+    setEditRows(rows);
+    setEditingSemester(semester);
+  }
+
+  function cancelEditSemester() {
+    setEditingSemester(null);
+    setEditRows({});
+  }
+
+  function updateEditRow(id: string, patch: Partial<EditRow>) {
+    setEditRows((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
+  }
+
+  async function saveEditSemester(semester: string, semesterRecords: AcademicRecord[]) {
+    setSavingSemester(true);
+    try {
+      await Promise.all(
+        semesterRecords.map((record) => {
+          const edit = editRows[record.id];
+          if (!edit) return Promise.resolve();
+          return patchJson("/api/academic-records", {
+            id: record.id,
+            course_name: edit.courseName,
+            credit: edit.credit,
+            grade: edit.grade,
+            semester: record.semester,
+            course_code: edit.courseCode,
+            category: edit.category,
+            skill_mapping: [edit.category, edit.courseCode, edit.courseName].filter(Boolean),
+          });
+        }),
+      );
+      onRefresh();
+      onToast(`${semester} 학기 성적을 수정했습니다.`, "success");
+      cancelEditSemester();
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "학기 수정에 실패했습니다.", "error");
+    } finally {
+      setSavingSemester(false);
+    }
+  }
+
   return (
     <>
       <SectionCard
         title="성적 입력"
         impactLabel="학기별 과목과 성적이 적합도 분석에 반영됩니다"
         count={visibleRecords.length}
-        onAdd={openAdd}
+        onAdd={() => openAdd()}
         addLabel="과목 추가"
       >
         {visibleRecords.length === 0 ? (
           <EmptyState
             message="성적표 PDF를 업로드하거나 과목을 직접 추가하면 전산직 핵심 역량과 비교해 준비도를 계산할 수 있습니다."
-            onAdd={openAdd}
+            onAdd={() => openAdd()}
             addLabel="+ 과목 추가"
           />
         ) : (
           <div className="grid gap-6">
+            {cleanupPreview && cleanupPreview.junkCount > 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-3xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-xs font-bold leading-5 text-amber-800">
+                  이전 방식으로 저장된 과목 {cleanupPreview.totalCount}개 중 정리 대상 {cleanupPreview.junkCount}개가
+                  있습니다(중복·OCR 오류 추정).
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setCleanupModalOpen(true)}
+                  className="shrink-0 rounded-full bg-amber-500 px-4 py-1.5 text-xs font-extrabold text-white hover:bg-amber-600"
+                >
+                  정리 대상 미리보기
+                </button>
+              </div>
+            ) : null}
+
             <div className="rounded-3xl bg-[var(--paper)] p-4">
-              <p className="text-sm font-extrabold text-[var(--ink)]">학업 성적 요약</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-extrabold text-[var(--ink)]">학업 성적 요약</p>
+                {!confirmDeleteAll ? (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteAll(true)}
+                    className="shrink-0 rounded-full px-3 py-1 text-xs font-bold text-red-500 hover:bg-red-50"
+                  >
+                    전체 삭제
+                  </button>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-xs font-bold text-red-500">전체 삭제할까요?</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleDeleteAll()}
+                      disabled={deletingAll}
+                      className="rounded-full bg-red-500 px-3 py-1 text-xs font-bold text-white hover:bg-red-600 disabled:opacity-50"
+                    >
+                      {deletingAll ? "삭제 중..." : "삭제 확정"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteAll(false)}
+                      disabled={deletingAll}
+                      className="rounded-full px-3 py-1 text-xs font-bold text-slate-400 hover:bg-slate-100"
+                    >
+                      취소
+                    </button>
+                  </div>
+                )}
+              </div>
               <p className="mt-1 text-xs text-slate-500">
                 누적/총계 행은 제외하고 학기별 이수 과목만 저장합니다.
               </p>
+              {hasRawDuplicates && (
+                <p className="mt-1 text-xs font-bold text-amber-600">
+                  중복 저장된 항목 {records.length - visibleRecords.length}건은 화면에서 자동으로 숨겼습니다.
+                </p>
+              )}
+              <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                <SummaryStat label="총 취득학점" value={totalCredits != null ? `${totalCredits}학점` : "-"} />
+                <SummaryStat label="평균 평점" value={averageGpa != null ? `${averageGpa} / 4.5` : "-"} />
+                <SummaryStat label="총 과목" value={`${courseCount}과목`} />
+                <SummaryStat
+                  label="현재 반영본"
+                  value={activeVersion ? formatAcademicTerm(activeVersion.academic_term) : "미적용"}
+                />
+                <SummaryStat
+                  label="최근 업데이트"
+                  value={activeVersion ? formatDate(activeVersion.updated_at) : "-"}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-extrabold text-[var(--ink)]">학기별 성적</p>
+              <button
+                type="button"
+                onClick={() => setSortDirection((current) => (current === "desc" ? "asc" : "desc"))}
+                className="rounded-full border border-[var(--line)] px-3 py-1.5 text-xs font-bold text-slate-600 hover:border-[var(--navy)]/40"
+              >
+                {sortDirection === "desc" ? "최신순" : "오래된순"}
+              </button>
             </div>
 
             <div className="grid gap-4">
-              {semesterKeys.map((semester) => (
-                <div key={semester} className="rounded-3xl border border-[var(--line)] p-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-extrabold text-[var(--ink)]">{semester}</h3>
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-500">
-                      {grouped[semester].length}과목
-                    </span>
-                  </div>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {grouped[semester].map((record) => {
-                      const code = getCourseCode(record);
-                      const category = getCategory(record);
+              {semesterKeys.map((semester, index) => {
+                const semesterRecords = grouped[semester];
+                const officialSummary = semesterSummaryByKey.get(semester);
+                const computed = computeCourseAggregate(semesterRecords);
+                const earnedCredits = officialSummary?.earned_credits ?? (computed.totalCredits || null);
+                const semesterGpa = officialSummary?.semester_gpa ?? computed.averageGpa;
+                const percentile = officialSummary?.percentile;
+                const isEditing = editingSemester === semester;
 
-                      return (
-                        <div key={record.id} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-extrabold text-[var(--ink)]">
-                                {record.course_name}
-                              </p>
-                              <p className="mt-1 text-xs font-bold text-slate-400">
-                                {[category, code].filter(Boolean).join(" · ") || "과목 정보"}
-                              </p>
-                            </div>
-                            <div className="flex shrink-0 gap-2">
-                              <button
-                                type="button"
-                                onClick={() => openEdit(record)}
-                                className="rounded-full px-2 py-1 text-xs font-bold text-slate-400 hover:bg-white hover:text-[var(--navy)]"
+                return (
+                  <details key={semester} open={index === 0} className="rounded-3xl border border-[var(--line)] bg-white">
+                    <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-3">
+                      <div>
+                        <h3 className="font-extrabold text-[var(--ink)]">{semester}</h3>
+                        <p className="mt-0.5 text-xs font-bold text-slate-400">
+                          {semesterRecords.length}과목 · 이수학점 {earnedCredits ?? "-"} · 학기 평점{" "}
+                          {semesterGpa ?? "-"}
+                          {percentile != null ? ` · 백분위 ${percentile}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 gap-2" onClick={(event) => event.preventDefault()}>
+                        {isEditing ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void saveEditSemester(semester, semesterRecords)}
+                              disabled={savingSemester}
+                              className="rounded-full bg-[var(--navy)] px-3 py-1 text-xs font-bold text-white disabled:opacity-50"
+                            >
+                              {savingSemester ? "저장 중..." : "저장"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditSemester}
+                              disabled={savingSemester}
+                              className="rounded-full px-3 py-1 text-xs font-bold text-slate-400 hover:bg-slate-100"
+                            >
+                              취소
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => startEditSemester(semester, semesterRecords)}
+                              className="rounded-full px-3 py-1 text-xs font-bold text-slate-500 hover:bg-slate-100"
+                            >
+                              학기 전체 수정
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openAdd(semester)}
+                              className="rounded-full border border-[var(--line)] px-3 py-1 text-xs font-bold text-[var(--navy)] hover:border-[var(--navy)]"
+                            >
+                              과목 추가
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </summary>
+                    <div className="border-t border-[var(--line)] p-3">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {semesterRecords.map((record) => {
+                          const code = getCourseCode(record);
+                          const category = getCategory(record);
+                          const edit = editRows[record.id];
+
+                          if (isEditing && edit) {
+                            return (
+                              <div
+                                key={record.id}
+                                className="grid grid-cols-[1fr_4rem_4rem] gap-1.5 rounded-2xl border border-[var(--line)] bg-white p-2"
                               >
-                                수정
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void handleDelete(record.id)}
-                                disabled={deletingId === record.id}
-                                className="rounded-full px-2 py-1 text-xs font-bold text-red-500 hover:bg-red-50 disabled:opacity-50"
-                              >
-                                {deletingId === record.id ? "삭제 중" : "삭제"}
-                              </button>
+                                <input
+                                  value={edit.courseName}
+                                  onChange={(event) => updateEditRow(record.id, { courseName: event.target.value })}
+                                  className="col-span-3 h-9 rounded-xl border border-[var(--line)] px-2 text-sm outline-none focus:border-[var(--navy)]"
+                                  placeholder="과목명"
+                                />
+                                <input
+                                  value={edit.credit}
+                                  onChange={(event) => updateEditRow(record.id, { credit: event.target.value })}
+                                  className="h-9 rounded-xl border border-[var(--line)] px-2 text-xs outline-none focus:border-[var(--navy)]"
+                                  placeholder="학점"
+                                />
+                                <input
+                                  value={edit.grade}
+                                  onChange={(event) => updateEditRow(record.id, { grade: event.target.value })}
+                                  className="h-9 rounded-xl border border-[var(--line)] px-2 text-xs outline-none focus:border-[var(--navy)]"
+                                  placeholder="성적"
+                                />
+                                <input
+                                  value={edit.category}
+                                  onChange={(event) => updateEditRow(record.id, { category: event.target.value })}
+                                  className="h-9 rounded-xl border border-[var(--line)] px-2 text-xs outline-none focus:border-[var(--navy)]"
+                                  placeholder="이수구분"
+                                />
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div
+                              key={record.id}
+                              className={`flex items-center justify-between gap-2 rounded-2xl border px-3 py-2 ${
+                                record.requires_review
+                                  ? "border-amber-300 bg-amber-50"
+                                  : "border-slate-100 bg-slate-50"
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p
+                                  className="truncate text-sm font-extrabold text-[var(--ink)]"
+                                  title={record.course_name}
+                                >
+                                  {record.course_name}
+                                </p>
+                                <p className="mt-0.5 text-xs font-bold text-slate-400">
+                                  {[category, code].filter(Boolean).join(" · ") || "-"}
+                                </p>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2 text-xs font-bold text-slate-600">
+                                <span>{record.credit ?? "-"}학점</span>
+                                <span>{record.grade || "-"}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => openEdit(record)}
+                                  className="rounded-full px-2 py-1 text-slate-400 hover:bg-white hover:text-[var(--navy)]"
+                                >
+                                  수정
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDelete(record.id)}
+                                  disabled={deletingId === record.id}
+                                  className="rounded-full px-2 py-1 text-red-500 hover:bg-red-50 disabled:opacity-50"
+                                >
+                                  {deletingId === record.id ? "삭제 중" : "삭제"}
+                                </button>
+                              </div>
                             </div>
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-600">
-                            <span className="rounded-full bg-white px-3 py-1">
-                              {record.credit ?? "-"}학점
-                            </span>
-                            <span className="rounded-full bg-white px-3 py-1">
-                              {record.grade || "성적 미입력"}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </details>
+                );
+              })}
             </div>
 
             <div>
@@ -300,13 +586,14 @@ export default function SubjectSection({ records, onRefresh, onToast }: Props) {
                 {coverage.map((item) => (
                   <div
                     key={item.subject}
-                    className={`rounded-2xl px-4 py-3 text-sm font-bold ${
+                    className={`flex items-center justify-between rounded-2xl px-4 py-3 text-sm font-bold ${
                       item.fulfilled
                         ? "bg-[var(--lime-soft)] text-[var(--navy)]"
                         : "bg-slate-100 text-slate-500"
                     }`}
                   >
-                    {item.subject} {item.fulfilled ? "충족" : "부족"}
+                    <span>{item.subject}</span>
+                    <span>{item.fulfilled ? item.grade || "충족" : "부족"}</span>
                   </div>
                 ))}
               </div>
@@ -314,6 +601,42 @@ export default function SubjectSection({ records, onRefresh, onToast }: Props) {
           </div>
         )}
       </SectionCard>
+
+      <Modal
+        isOpen={cleanupModalOpen}
+        onClose={() => setCleanupModalOpen(false)}
+        title="정리 대상 미리보기"
+        footer={
+          <>
+            <button type="button" onClick={() => setCleanupModalOpen(false)} className="btn-light">
+              닫기
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleCleanupDelete()}
+              disabled={cleanupDeleting || !cleanupPreview?.junkCount}
+              className="btn-dark disabled:opacity-50"
+            >
+              {cleanupDeleting ? "삭제 중..." : `정리 대상만 삭제 (${cleanupPreview?.junkCount ?? 0}건)`}
+            </button>
+          </>
+        }
+      >
+        <p className="text-xs leading-5 text-slate-500">
+          삭제 전 원본은 백업 로그에 남습니다. 아래 {cleanupPreview?.junkCount ?? 0}건만 삭제되고, 나머지 과목은
+          그대로 유지됩니다.
+        </p>
+        <div className="grid gap-2">
+          {(cleanupPreview?.candidates ?? []).map((candidate) => (
+            <div key={candidate.id} className="rounded-2xl bg-slate-50 px-4 py-2.5">
+              <p className="text-sm font-extrabold text-[var(--ink)]">
+                {candidate.course_name || "(과목명 없음)"} <span className="text-xs font-bold text-slate-400">· {candidate.semester}</span>
+              </p>
+              <p className="mt-0.5 text-xs text-slate-500">{candidate.reason}</p>
+            </div>
+          ))}
+        </div>
+      </Modal>
 
       <Modal
         isOpen={open}
@@ -400,6 +723,15 @@ export default function SubjectSection({ records, onRefresh, onToast }: Props) {
         </div>
       </Modal>
     </>
+  );
+}
+
+function SummaryStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl bg-white px-3 py-2 text-center">
+      <p className="text-[11px] font-bold text-slate-400">{label}</p>
+      <p className="mt-0.5 text-sm font-extrabold text-[var(--ink)]">{value}</p>
+    </div>
   );
 }
 

@@ -11,11 +11,13 @@ const GRADES = ["1학년", "2학년", "3학년", "4학년", "졸업"];
 
 type Props = {
   profile: CareerProfileRecord | null;
+  /** active 성적표 버전 → 과목 재계산 → profile.gpa 순으로 우선순위를 매긴 표시용 GPA. */
+  effectiveGpa: number | null;
   onRefresh: () => void;
   onToast: (msg: string, type: "success" | "error") => void;
 };
 
-export default function BasicInfoSection({ profile, onRefresh, onToast }: Props) {
+export default function BasicInfoSection({ profile, effectiveGpa, onRefresh, onToast }: Props) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -66,7 +68,7 @@ export default function BasicInfoSection({ profile, onRefresh, onToast }: Props)
             <InfoRow label="학년" value={profile?.grade ?? "-"} />
             <InfoRow label="학교" value={profile?.university || "-"} />
             <InfoRow label="전공" value={profile?.major || "-"} />
-            <InfoRow label="전체 GPA" value={profile?.gpa != null ? `${profile.gpa} / 4.5` : "-"} />
+            <InfoRow label="전체 GPA" value={effectiveGpa != null ? `${effectiveGpa} / 4.5` : "-"} />
           </div>
         ) : (
           <div className="flex flex-col items-center gap-3 py-6 text-center">
@@ -117,6 +119,9 @@ export default function BasicInfoSection({ profile, onRefresh, onToast }: Props)
         <TextInput label="학교" value={form.university} onChange={(value) => setForm((current) => ({ ...current, university: value }))} placeholder="OO대학교" />
         <TextInput label="전공" value={form.major} onChange={(value) => setForm((current) => ({ ...current, major: value }))} placeholder="AI·SW학과" />
         <TextInput label="학점 (4.5 기준)" value={form.gpa} onChange={(value) => setForm((current) => ({ ...current, gpa: value }))} placeholder="3.7" type="number" />
+        <p className="text-xs leading-5 text-slate-400">
+          성적표 PDF를 업로드해 적용한 버전이 있으면 그 성적표의 누적 GPA가 여기 입력값보다 우선 표시됩니다.
+        </p>
       </Modal>
     </>
   );

@@ -4,6 +4,8 @@
 :root {
   --navy: #10182b;
   --navy-2: #1b2740;
+  /* 헤더 전용: 로고의 흰색 F와 대비를 더 확보하기 위해 브랜드 --navy보다 살짝 더 어둡게. */
+  --navy-header: #0a0f1c;
   --paper: #f6f5f1;
   --paper-2: #eeece5;
   --lime: #c8ff4d;

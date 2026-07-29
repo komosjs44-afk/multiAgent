@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { PDFParse } from "pdf-parse";
 
 import {
+  buildTranscriptSummary,
+  extractSemesterSummaries,
   getTranscriptDiagnostics,
   parseTranscriptText,
 } from "@/lib/transcriptParser";
@@ -56,12 +56,11 @@ function unique(values: string[]) {
 
 async function extractPdfText(file: File) {
   const buffer = Buffer.from(await file.arrayBuffer());
-  PDFParse.setWorker(
-    pathToFileURL(
-      join(process.cwd(), "node_modules", "pdfjs-dist", "legacy", "build", "pdf.worker.mjs"),
-    ).toString(),
-  );
 
+  // 이전에는 PDFParse.setWorker()로 로컬 node_modules 경로를 직접 가리켰습니다. Node.js에서는
+  // getText()가 워커 설정 없이도 동작하고(직접 재현 확인), Vercel 서버리스 배포에서는 이 경로가
+  // 번들에 포함되지 않아 "Setting up fake worker failed: Cannot find module ..."로 추출 자체가
+  // 실패하는 원인이었습니다. 그래서 이 설정을 제거합니다.
   const parser = new PDFParse({ data: buffer });
 
   try {
@@ -138,6 +137,25 @@ function buildExtraction({
     docType === "transcript"
       ? getTranscriptDiagnostics(text, parsedCourses)
       : undefined;
+  const summary =
+    docType === "transcript" && diagnostics
+      ? buildTranscriptSummary(text, parsedCourses, diagnostics)
+      : undefined;
+  const semesterSummaries =
+    docType === "transcript" ? extractSemesterSummaries(text) : undefined;
+
+  if (docType === "transcript") {
+    // 개인정보(원문·과목명)는 남기지 않고, 진단에 필요한 개수/길이만 기록합니다.
+    console.log("[evidence/extract] transcript parsed", {
+      rawTextLength: text.length,
+      detectedSemesterCount: diagnostics?.detectedSemesterCount,
+      detectedCourseCodeCount: diagnostics?.detectedCourseCodeCount,
+      parsedCourseCount: diagnostics?.parsedCourseCount,
+      needsReviewCount: diagnostics?.needsReviewCount,
+      confidencePercent: summary?.confidencePercent,
+    });
+  }
+
   const courses = parsedCourses.map((course) => ({
     semester: course.semester,
     category: course.category,
@@ -146,6 +164,7 @@ function buildExtraction({
     credit: course.credit,
     grade: course.grade,
     skillMapping: inferSkillMapping(course.courseName),
+    needsReview: course.needsReview,
   }));
   const certificates = extractCertificates(text);
   const projects = extractProjects(text, fileName, docType);
@@ -155,6 +174,8 @@ function buildExtraction({
     ...certificates.map(() => "자격증"),
   ]);
   const warning = diagnostics?.warnings[0];
+  // PDF에 총계 문구가 명시돼 있으면 그 값을 우선 쓰고, 없으면 학기별 요약을 학점 가중평균해 계산합니다.
+  const gpa = docType === "transcript" ? extractGpa(text) ?? summary?.overallGpa?.toFixed(2) : undefined;
 
   return {
     documentType: docType,
@@ -165,11 +186,13 @@ function buildExtraction({
     certificates,
     projects,
     courses,
-    grade: docType === "transcript" ? extractGpa(text) : undefined,
+    grade: gpa,
     rawText: text.slice(0, 4000),
     pages: [{ page: 1, text: text.slice(0, 4000) }],
     pageCount: text ? 1 : 0,
     diagnostics,
+    summary,
+    semesterSummaries,
     warning,
   };
 }
@@ -201,6 +224,8 @@ export async function POST(request: Request) {
     const text = await extractPdfText(file);
     return NextResponse.json(buildExtraction({ fileName: file.name, docType, text }));
   } catch (error) {
+    // 원인 파악이 가능하도록 서버 로그에 남깁니다(에러 메시지/스택만, 문서 내용은 포함하지 않음).
+    console.error("[evidence/extract] failed", error);
     const message =
       error instanceof Error ? error.message : "문서 처리에 실패했습니다.";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -1,12 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { postJson } from "../apiUtils";
-import Modal from "../shared/Modal";
+import { getJson, postJson } from "../apiUtils";
 import SectionCard from "../shared/SectionCard";
-import type { AcademicRecord, CareerProfileRecord, ExtractedEvidence } from "@/types/career";
+import TranscriptReviewModal, { type TranscriptRow } from "./TranscriptReviewModal";
+import type {
+  AcademicRecord,
+  CareerProfileRecord,
+  ExtractedEvidence,
+  TranscriptDiff,
+  TranscriptVersion,
+} from "@/types/career";
 
 const COMPANY_OPTIONS = [
   "한국전력공사",
@@ -19,21 +25,16 @@ const COMPANY_OPTIONS = [
   "근로복지공단",
 ];
 
-type TranscriptRow = {
-  id: string;
-  semester: string;
-  category: string;
-  courseCode: string;
-  courseName: string;
-  credit: string;
-  grade: string;
-};
-
 type Props = {
   profile: CareerProfileRecord | null;
-  academicRecords: AcademicRecord[];
+  /** active 성적표 버전 → 과목 재계산 → profile.gpa 순으로 우선순위를 매긴 표시용 GPA. */
+  effectiveGpa: number | null;
+  activeVersion: TranscriptVersion | null;
+  pendingReviewVersion: TranscriptVersion | null;
   onRefresh: () => void;
   onToast: (msg: string, type: "success" | "error") => void;
+  /** "성적 상세 보기" 클릭 시 프로필 탭을 "학업·성적"으로 전환합니다. */
+  onViewDetail: () => void;
 };
 
 function splitTargets(value?: string | null) {
@@ -48,62 +49,59 @@ function rowKey(index: number) {
   return `row-${Date.now()}-${index}`;
 }
 
-function groupRowsBySemester(rows: TranscriptRow[]) {
-  return rows.reduce<Record<string, TranscriptRow[]>>((groups, row) => {
-    const semester = row.semester.trim() || "학기 미분류";
-    groups[semester] = groups[semester] ?? [];
-    groups[semester].push(row);
-    return groups;
-  }, {});
+function emptyRow(semester = ""): TranscriptRow {
+  return {
+    id: rowKey(0),
+    semester,
+    category: "",
+    courseCode: "",
+    courseName: "",
+    credit: "",
+    grade: "",
+  };
 }
 
-function academicRecordKey(record: AcademicRecord) {
-  const code = record.skill_mapping.find((item) => /^[A-Z]{1,5}\d{2,4}[A-Z0-9]*$/.test(item));
-  const semester = record.semester?.trim() || "학기 미분류";
-  return `${semester}:${code || record.course_name.trim()}`;
+/** "2026-1" → "2026년 1학기 반영본". 형식이 아니면 원문 그대로 표시합니다. */
+function formatAcademicTerm(term: string) {
+  const match = term.match(/^(\d{4})-(\d)$/);
+  if (!match) return term || "반영 학기 미확인";
+  return `${match[1]}년 ${match[2]}학기 반영본`;
 }
 
-function transcriptRowKey(row: TranscriptRow) {
-  const semester = row.semester.trim() || "학기 미분류";
-  return `${semester}:${row.courseCode.trim() || row.courseName.trim()}`;
+function formatDate(value?: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleDateString("ko-KR");
 }
 
-function normalizeRows(rows: TranscriptRow[], existingRecords: AcademicRecord[]) {
-  const seen = new Set<string>();
-  const existing = new Set(existingRecords.map(academicRecordKey));
-  return rows
-    .map((row) => ({
-      ...row,
-      semester: row.semester.trim() || "학기 미분류",
-      category: row.category.trim(),
-      courseCode: row.courseCode.trim(),
-      courseName: row.courseName.trim(),
-      credit: row.credit.trim(),
-      grade: row.grade.trim(),
-    }))
-    .filter((row) => row.courseName)
-    .filter((row) => {
-      const key = transcriptRowKey(row);
-      if (existing.has(key)) return false;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
-export default function QuickAnalysisSection({ profile, academicRecords, onRefresh, onToast }: Props) {
+export default function QuickAnalysisSection({
+  profile,
+  effectiveGpa,
+  activeVersion,
+  pendingReviewVersion,
+  onRefresh,
+  onToast,
+  onViewDetail,
+}: Props) {
   const router = useRouter();
   const [targets, setTargets] = useState(() => splitTargets(profile?.target_company));
   const [isSaving, setIsSaving] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const [isSavingTranscript, setIsSavingTranscript] = useState(false);
+  const [isActivating, setIsActivating] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [modalStage, setModalStage] = useState<"review" | "saved">("review");
+  const [savedVersionId, setSavedVersionId] = useState<string | null>(null);
+  const [versionDiff, setVersionDiff] = useState<TranscriptDiff | null>(null);
   const [transcriptRows, setTranscriptRows] = useState<TranscriptRow[]>([]);
   const [extractedGpa, setExtractedGpa] = useState("");
   const [diagnostics, setDiagnostics] = useState<ExtractedEvidence["diagnostics"]>();
+  const [transcriptSummary, setTranscriptSummary] = useState<ExtractedEvidence["summary"]>();
+  const [semesterSummaries, setSemesterSummaries] = useState<ExtractedEvidence["semesterSummaries"]>();
+  const [lastFileName, setLastFileName] = useState("");
+  const [transcriptNotice, setTranscriptNotice] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const visibleTargets = targets.filter(Boolean);
-  const groupedRows = useMemo(() => groupRowsBySemester(transcriptRows), [transcriptRows]);
 
   // profile.target_company는 이 화면 밖(새로고침, 다른 저장 동작의 refetch)에서도 바뀔 수 있으므로,
   // 마운트 시 한 번만 초기화하는 useState 대신, 렌더 중 값이 바뀐 것을 감지하면 즉시 다시 동기화합니다.
@@ -114,15 +112,6 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
     setSyncedTargetCompany(profile?.target_company ?? null);
     setTargets(splitTargets(profile?.target_company));
   }
-
-  const lastSavedAt = useMemo(() => {
-    if (!academicRecords.length) return null;
-    return academicRecords.reduce<string | null>((latest, record) => {
-      if (!record.created_at) return latest;
-      if (!latest || record.created_at > latest) return record.created_at;
-      return latest;
-    }, null);
-  }, [academicRecords]);
 
   function updateTarget(index: number, value: string) {
     setTargets((current) =>
@@ -141,18 +130,20 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
   }
 
   function addTranscriptRow(semester = "") {
-    setTranscriptRows((current) => [
-      ...current,
-      {
-        id: rowKey(current.length),
-        semester,
-        category: "",
-        courseCode: "",
-        courseName: "",
-        credit: "",
-        grade: "",
-      },
-    ]);
+    setTranscriptRows((current) => [...current, emptyRow(semester)]);
+  }
+
+  function resetReviewState() {
+    setTranscriptRows([]);
+    setExtractedGpa("");
+    setDiagnostics(undefined);
+    setTranscriptSummary(undefined);
+    setSemesterSummaries(undefined);
+    setLastFileName("");
+    setTranscriptNotice(null);
+    setModalStage("review");
+    setSavedVersionId(null);
+    setVersionDiff(null);
   }
 
   async function handleTranscriptSelect(file: File | undefined) {
@@ -185,102 +176,165 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
           courseName: course.courseName,
           credit: course.credit == null ? "" : String(course.credit),
           grade: course.grade ?? "",
+          needsReview: course.needsReview ?? false,
         })) ?? [];
 
-      setTranscriptRows(
-        rows.length
-          ? rows
-          : [
-              {
-                id: rowKey(0),
-                semester: "",
-                category: "",
-                courseCode: "",
-                courseName: "",
-                credit: "",
-                grade: "",
-              },
-            ],
-      );
+      setModalStage("review");
+      setSavedVersionId(null);
+      setVersionDiff(null);
+      setTranscriptRows(rows.length ? rows : [emptyRow()]);
       setExtractedGpa(payload.grade ?? "");
       setDiagnostics(payload.diagnostics);
+      setTranscriptSummary(payload.summary);
+      setSemesterSummaries(payload.semesterSummaries);
+      setLastFileName(file.name);
       setPreviewOpen(true);
 
       const warning = payload.warning ?? payload.diagnostics?.warnings[0];
-      onToast(
-        warning ?? `${file.name}에서 ${rows.length}개 과목을 추출했습니다. 저장 전에 확인해주세요.`,
-        warning ? "error" : "success",
-      );
+      setTranscriptNotice({
+        message: warning ?? `${file.name}에서 ${rows.length}개 과목을 추출했습니다. 저장 전에 확인해주세요.`,
+        type: warning ? "error" : "success",
+      });
     } catch (error) {
-      setTranscriptRows([
-        {
-          id: rowKey(0),
-          semester: "",
-          category: "",
-          courseCode: "",
-          courseName: "",
-          credit: "",
-          grade: "",
-        },
-      ]);
+      setModalStage("review");
+      setSavedVersionId(null);
+      setVersionDiff(null);
+      setTranscriptRows([emptyRow()]);
       setExtractedGpa("");
       setDiagnostics(undefined);
+      setTranscriptSummary(undefined);
+      setSemesterSummaries(undefined);
+      setLastFileName("");
       setPreviewOpen(true);
-      onToast(
-        error instanceof Error ? error.message : "성적표 추출에 실패했습니다.",
-        "error",
-      );
+      setTranscriptNotice({
+        message: error instanceof Error ? error.message : "성적표 추출에 실패했습니다.",
+        type: "error",
+      });
     } finally {
       setIsExtracting(false);
     }
   }
 
-  async function saveTranscriptPreview() {
-    if (isSavingTranscript) return; // 이중 클릭으로 같은 과목이 두 번 저장되는 것을 방지합니다.
+  /** 검토 저장된(review 상태) 성적표를 다시 열어 적용 여부를 결정할 수 있게 합니다. */
+  async function resumeReview() {
+    if (!pendingReviewVersion) return;
+    setIsResuming(true);
+    try {
+      const payload = await getJson<{
+        version: TranscriptVersion;
+        records: AcademicRecord[];
+        error?: string;
+      }>(`/api/academic-transcripts/${pendingReviewVersion.id}`);
 
-    const rowsToSave = normalizeRows(transcriptRows, academicRecords);
+      const rows = payload.records.map((record, index) => ({
+        id: rowKey(index),
+        semester: record.semester,
+        category: record.category ?? "",
+        courseCode: record.course_code ?? "",
+        courseName: record.course_name,
+        credit: record.credit == null ? "" : String(record.credit),
+        grade: record.grade ?? "",
+        needsReview: record.requires_review ?? false,
+      }));
 
-    if (!rowsToSave.length && !extractedGpa.trim()) {
-      setPreviewOpen(false);
+      setTranscriptRows(rows);
+      setExtractedGpa(payload.version.cumulative_gpa != null ? String(payload.version.cumulative_gpa) : "");
+      setDiagnostics(undefined);
+      setTranscriptSummary({
+        totalCredits: payload.version.total_credits,
+        overallGpa: payload.version.cumulative_gpa,
+        percentile: payload.version.percentile,
+        courseCount: payload.version.total_course_count,
+        confidencePercent: 100,
+      });
+      setSemesterSummaries(undefined);
+      setLastFileName(payload.version.file_name);
+      setModalStage("saved");
+      setSavedVersionId(payload.version.id);
+      setVersionDiff(null);
+      setTranscriptNotice({
+        message: "이미 검토 저장된 성적표입니다. 내용을 확인한 뒤 적용해주세요.",
+        type: "success",
+      });
+      setPreviewOpen(true);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "검토 중인 성적표를 불러오지 못했습니다.", "error");
+    } finally {
+      setIsResuming(false);
+    }
+  }
+
+  async function saveTranscriptVersion() {
+    if (isSavingTranscript) return; // 이중 클릭으로 같은 버전이 두 번 저장되는 것을 방지합니다.
+
+    const rowsToSave = transcriptRows
+      .map((row) => ({
+        ...row,
+        semester: row.semester.trim() || "학기 미분류",
+        category: row.category.trim(),
+        courseCode: row.courseCode.trim(),
+        courseName: row.courseName.trim(),
+        credit: row.credit.trim(),
+        grade: row.grade.trim(),
+      }))
+      .filter((row) => row.courseName);
+
+    if (!rowsToSave.length) {
+      onToast("저장할 과목이 없습니다.", "error");
       return;
     }
 
     setIsSavingTranscript(true);
     try {
-      // 목표기업 등 다른 필드는 건드리지 않고, 이 화면이 실제로 알아낸 값만 부분 업데이트합니다.
-      if (extractedGpa.trim()) {
-        await postJson("/api/career-profile", {
-          gpa: extractedGpa.trim(),
-          target_company: targets.filter(Boolean).join(", "),
-        });
-      }
-
-      await Promise.all(
-        rowsToSave.map((row) =>
-          postJson("/api/academic-records", {
-            course_name: row.courseName,
-            credit: row.credit,
-            grade: row.grade,
-            semester: row.semester,
-            skill_mapping: [row.category, row.courseCode, row.courseName].filter(Boolean),
-          }),
-        ),
+      const payload = await postJson<{ version: TranscriptVersion; diff: TranscriptDiff }>(
+        "/api/academic-transcripts",
+        {
+          fileName: lastFileName,
+          courses: rowsToSave,
+          summary: transcriptSummary,
+          semesterSummaries,
+        },
       );
 
-      onRefresh();
-      onToast("성적 입력이 저장되어 분석이 업데이트되었습니다.", "success");
-      setPreviewOpen(false);
+      onRefresh(); // pendingReviewVersion 배지를 즉시 반영합니다.
+      setModalStage("saved");
+      setSavedVersionId(payload.version.id);
+      setVersionDiff(payload.diff);
+      setTranscriptNotice({
+        message: "성적표를 검토 저장했습니다. 내용을 확인한 뒤 적용해주세요.",
+        type: "success",
+      });
+      onToast("성적표를 검토 저장했습니다.", "success");
     } catch (error) {
-      onToast(
-        error instanceof Error ? error.message : "성적 저장에 실패했습니다.",
-        "error",
-      );
+      onToast(error instanceof Error ? error.message : "성적표 저장에 실패했습니다.", "error");
     } finally {
       setIsSavingTranscript(false);
     }
   }
 
+  async function activateTranscriptVersion() {
+    if (!savedVersionId || isActivating) return;
+
+    setIsActivating(true);
+    try {
+      await postJson(`/api/academic-transcripts/${savedVersionId}/activate`, {});
+      onRefresh();
+      onToast("성적표를 적용했습니다. 이제 이 버전 기준으로 GPA와 분석이 계산됩니다.", "success");
+      setPreviewOpen(false);
+      resetReviewState();
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "성적표 적용에 실패했습니다.", "error");
+    } finally {
+      setIsActivating(false);
+    }
+  }
+
   async function saveAndAnalyze() {
+    if (!activeVersion && pendingReviewVersion) {
+      onToast("검토 중인 성적표가 있습니다. 적용 후 분석해주세요.", "error");
+      return;
+    }
+
     setIsSaving(true);
     try {
       await postJson("/api/career-profile", {
@@ -324,7 +378,7 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
             <SummaryField label="학년" value={profile?.grade || "-"} />
             <SummaryField label="학교" value={profile?.university || "-"} />
             <SummaryField label="전공" value={profile?.major || "-"} />
-            <SummaryField label="GPA" value={profile?.gpa != null ? String(profile.gpa) : "-"} />
+            <SummaryField label="GPA" value={effectiveGpa != null ? `${effectiveGpa} / 4.5` : "-"} />
           </div>
 
           <div>
@@ -346,45 +400,77 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
               ) : null}
             </div>
             <div className="mt-3 grid gap-3 md:grid-cols-3">
-              {[0, 1, 2].map((index) => (
-                <label key={index} className="grid gap-1.5">
-                  <span className="text-xs font-bold text-slate-500">
-                    {index + 1}순위 목표기관
-                  </span>
-                  <select
-                    value={targets[index]}
-                    onChange={(event) => updateTarget(index, event.target.value)}
-                    className="h-11 rounded-2xl border border-[var(--line)] bg-white px-4 text-sm outline-none focus:border-[var(--navy)]"
-                  >
-                    <option value="">선택하기</option>
-                    {COMPANY_OPTIONS.map((company) => (
-                      <option key={company} value={company}>
-                        {company}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
+              {[0, 1, 2].map((index) => {
+                const currentValue = targets[index];
+                // 저장된 값이 COMPANY_OPTIONS 목록에 없으면(예: 과거에 자유 입력된 값) select에
+                // 해당 옵션을 동적으로 추가해, placeholder("선택하기")로 비어 보이지 않게 합니다.
+                const options =
+                  currentValue && !COMPANY_OPTIONS.includes(currentValue)
+                    ? [currentValue, ...COMPANY_OPTIONS]
+                    : COMPANY_OPTIONS;
+
+                return (
+                  <label key={index} className="grid gap-1.5">
+                    <span className="text-xs font-bold text-slate-500">
+                      {index + 1}순위 목표기관
+                    </span>
+                    <select
+                      value={currentValue}
+                      onChange={(event) => updateTarget(index, event.target.value)}
+                      className="h-11 rounded-2xl border border-[var(--line)] bg-white px-4 text-sm outline-none focus:border-[var(--navy)]"
+                    >
+                      <option value="">선택하기</option>
+                      {options.map((company) => (
+                        <option key={company} value={company}>
+                          {company}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              })}
             </div>
           </div>
 
           <div className="rounded-3xl border border-dashed border-[var(--line)] bg-[var(--paper)] p-5">
             <h3 className="text-sm font-extrabold text-[var(--ink)]">
-              성적표 PDF 업로드
+              성적표 PDF
             </h3>
 
-            {academicRecords.length > 0 ? (
-              <div className="mt-3 grid gap-2 rounded-2xl bg-emerald-50 p-4 text-xs font-bold text-emerald-800 sm:grid-cols-4">
-                <span className="rounded-full bg-white px-3 py-1.5 text-center">✓ 학업성적 저장 완료</span>
-                <span className="rounded-full bg-white px-3 py-1.5 text-center">
-                  {lastSavedAt ? `마지막 저장: ${new Date(lastSavedAt).toLocaleDateString("ko-KR")}` : "저장 시각 미확인"}
-                </span>
-                <span className="rounded-full bg-white px-3 py-1.5 text-center">
-                  저장된 과목 {academicRecords.length}개
-                </span>
-                <span className="rounded-full bg-white px-3 py-1.5 text-center">
-                  GPA {profile?.gpa != null ? profile.gpa : "미입력"}
-                </span>
+            {activeVersion ? (
+              <div className="mt-3 rounded-2xl bg-emerald-50 p-4 text-emerald-900">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-emerald-600 px-2.5 py-1 text-xs font-black text-white">
+                    현재 적용 중
+                  </span>
+                  <span className="text-sm font-extrabold">{activeVersion.file_name || "파일명 미확인"}</span>
+                </div>
+                <p className="mt-1 text-xs font-bold text-emerald-700">
+                  {formatAcademicTerm(activeVersion.academic_term)}
+                </p>
+                <div className="mt-3 grid gap-2 text-xs font-bold sm:grid-cols-4">
+                  <span className="rounded-full bg-white px-3 py-1.5 text-center">
+                    업로드 {formatDate(activeVersion.uploaded_at)}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1.5 text-center">
+                    총 취득학점 {activeVersion.total_credits ?? "-"}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1.5 text-center">
+                    누적 GPA {activeVersion.cumulative_gpa ?? "-"}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1.5 text-center">
+                    저장 과목 {activeVersion.total_course_count}과목
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={onViewDetail}
+                    className="rounded-full border border-emerald-300 bg-white px-4 py-2 text-xs font-extrabold text-emerald-700 hover:bg-emerald-50"
+                  >
+                    성적 상세 보기
+                  </button>
+                </div>
               </div>
             ) : (
               <p className="mt-2 text-sm leading-6 text-slate-500">
@@ -393,12 +479,29 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
               </p>
             )}
 
+            {pendingReviewVersion ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-xs font-bold leading-5 text-amber-800">
+                  검토 중인 성적표가 있습니다 ({pendingReviewVersion.file_name || "파일명 미확인"}). 적용해야
+                  분석과 GPA에 반영됩니다.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void resumeReview()}
+                  disabled={isResuming}
+                  className="shrink-0 rounded-full bg-amber-500 px-4 py-1.5 text-xs font-extrabold text-white hover:bg-amber-600 disabled:opacity-50"
+                >
+                  {isResuming ? "불러오는 중..." : "검토 계속하기"}
+                </button>
+              </div>
+            ) : null}
+
             <p className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-bold leading-5 text-amber-800">
               현재는 텍스트가 선택되는 PDF만 지원합니다. 스캔본 또는 이미지 기반 PDF는 OCR을
               지원하지 않아 추출에 실패할 수 있습니다.
             </p>
             <label className="mt-4 inline-flex cursor-pointer rounded-full bg-[var(--navy)] px-5 py-3 text-sm font-extrabold text-white transition hover:bg-[var(--navy-2)]">
-              {isExtracting ? "추출 중..." : academicRecords.length > 0 ? "다시 업로드" : "PDF 선택"}
+              {isExtracting ? "추출 중..." : activeVersion ? "새 성적표 업로드" : "PDF 선택"}
               <input
                 type="file"
                 accept=".pdf,application/pdf"
@@ -428,136 +531,26 @@ export default function QuickAnalysisSection({ profile, academicRecords, onRefre
         </div>
       </SectionCard>
 
-      <Modal
+      <TranscriptReviewModal
         isOpen={previewOpen}
         onClose={() => setPreviewOpen(false)}
-        title="성적표 인식 결과 확인" size="wide"
-        footer={
-          <>
-            <button type="button" onClick={() => setPreviewOpen(false)} className="btn-light">
-              닫기
-            </button>
-            <button
-              type="button"
-              onClick={saveTranscriptPreview}
-              disabled={isSavingTranscript}
-              className="btn-dark disabled:opacity-50"
-            >
-              {isSavingTranscript ? "저장 중..." : "전체 저장"}
-            </button>
-          </>
-        }
-      >
-        <div className="rounded-3xl bg-[var(--paper)] p-4">
-          <p className="text-sm font-extrabold text-[var(--ink)]">
-            저장 전 과목을 확인해주세요.
-          </p>
-          <p className="mt-1 text-sm leading-6 text-slate-500">
-            잘못 인식된 과목은 바로 수정하거나 삭제할 수 있습니다.
-          </p>
-          {diagnostics ? (
-            <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
-              <span className="rounded-full bg-white px-3 py-2 font-bold">
-                과목코드 {diagnostics.detectedCourseCodeCount}개
-              </span>
-              <span className="rounded-full bg-white px-3 py-2 font-bold">
-                학기 {diagnostics.detectedSemesterCount}개
-              </span>
-              <span className="rounded-full bg-white px-3 py-2 font-bold">
-                추출 {diagnostics.parsedCourseCount}개
-              </span>
-            </div>
-          ) : null}
-          {diagnostics?.warnings.length ? (
-            <div className="mt-3 grid gap-1">
-              {diagnostics.warnings.map((warning) => (
-                <p key={warning} className="text-xs font-bold text-amber-700">
-                  {warning}
-                </p>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <PreviewInput
-          label="전체 GPA"
-          value={extractedGpa}
-          onChange={setExtractedGpa}
-          placeholder="3.69"
-        />
-
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => addTranscriptRow()}
-            className="rounded-full border border-[var(--line)] px-4 py-2 text-xs font-extrabold text-[var(--navy)] hover:border-[var(--navy)]"
-          >
-            과목 직접 추가
-          </button>
-        </div>
-
-        {Object.entries(groupedRows).map(([semester, rows]) => (
-          <div key={semester} className="grid min-w-0 gap-3 rounded-3xl border border-[var(--line)] p-4">
-            <div className="flex items-center justify-between">
-              <h4 className="font-extrabold text-[var(--ink)]">{semester}</h4>
-              <span className="text-xs font-bold text-slate-400">{rows.length}과목</span>
-            </div>
-            {rows.map((row) => (
-              <div key={row.id} className="grid min-w-0 gap-3 rounded-2xl bg-slate-50 p-3">
-                <div className="grid min-w-0 gap-2 md:grid-cols-2">
-                  <PreviewInput
-                    label="학기"
-                    value={row.semester}
-                    onChange={(value) => updateTranscriptRow(row.id, { semester: value })}
-                    placeholder="2025-1"
-                  />
-                  <PreviewInput
-                    label="과목코드"
-                    value={row.courseCode}
-                    onChange={(value) => updateTranscriptRow(row.id, { courseCode: value })}
-                    placeholder="AS011C"
-                  />
-                </div>
-                <PreviewInput
-                  label="과목명"
-                  value={row.courseName}
-                  onChange={(value) => updateTranscriptRow(row.id, { courseName: value })}
-                  placeholder="운영체제"
-                />
-                <div className="grid min-w-0 gap-2 md:grid-cols-3">
-                  <PreviewInput
-                    label="이수구분"
-                    value={row.category}
-                    onChange={(value) => updateTranscriptRow(row.id, { category: value })}
-                    placeholder="계공"
-                  />
-                  <PreviewInput
-                    label="학점"
-                    value={row.credit}
-                    onChange={(value) => updateTranscriptRow(row.id, { credit: value })}
-                    placeholder="3"
-                  />
-                  <PreviewInput
-                    label="성적"
-                    value={row.grade}
-                    onChange={(value) => updateTranscriptRow(row.id, { grade: value })}
-                    placeholder="A0"
-                  />
-                </div>
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => removeTranscriptRow(row.id)}
-                    className="rounded-xl border border-red-100 px-3 py-2 text-xs font-extrabold text-red-500 hover:bg-red-50"
-                  >
-                    삭제
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        ))}
-      </Modal>
+        fileName={lastFileName}
+        notice={transcriptNotice}
+        rows={transcriptRows}
+        onUpdateRow={updateTranscriptRow}
+        onRemoveRow={removeTranscriptRow}
+        onAddRow={() => addTranscriptRow()}
+        gpa={extractedGpa}
+        onGpaChange={setExtractedGpa}
+        summary={transcriptSummary}
+        diagnostics={diagnostics}
+        stage={modalStage}
+        diff={versionDiff}
+        onSave={() => void saveTranscriptVersion()}
+        isSaving={isSavingTranscript}
+        onActivate={() => void activateTranscriptVersion()}
+        isActivating={isActivating}
+      />
     </>
   );
 }
@@ -568,29 +561,5 @@ function SummaryField({ label, value }: { label: string; value: string }) {
       <p className="text-xs font-bold text-slate-400">{label}</p>
       <p className="mt-0.5 text-sm font-extrabold text-[var(--ink)]">{value}</p>
     </div>
-  );
-}
-
-function PreviewInput({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <label className="grid w-full min-w-0 gap-1">
-      <span className="text-xs font-bold text-slate-500">{label}</span>
-      <input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="h-10 w-full min-w-0 rounded-xl border border-[var(--line)] bg-white px-3 text-sm outline-none focus:border-[var(--navy)]"
-      />
-    </label>
   );
 }

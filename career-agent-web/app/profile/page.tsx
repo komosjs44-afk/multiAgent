@@ -6,7 +6,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import { isDemoMode } from "@/lib/demo/config";
-import type { AcademicRecord, CareerProfileRecord, EvidenceRecord, EvidenceSkillRow } from "@/types/career";
+import { resolveGpa } from "@/lib/academicSummary";
+import type {
+  AcademicRecord,
+  CareerProfileRecord,
+  EvidenceRecord,
+  EvidenceSkillRow,
+  SemesterSummaryRecord,
+  TranscriptVersion,
+} from "@/types/career";
 import ActivitySection from "./_components/sections/ActivitySection";
 import AwardSection from "./_components/sections/AwardSection";
 import BasicInfoSection from "./_components/sections/BasicInfoSection";
@@ -23,6 +31,9 @@ type PageData = {
   academic: AcademicRecord[];
   evidence: EvidenceRecord[];
   skillsByEvidenceId: Record<string, EvidenceSkillRow[]>;
+  activeVersion: TranscriptVersion | null;
+  semesterSummaries: SemesterSummaryRecord[];
+  pendingReviewVersion: TranscriptVersion | null;
 };
 
 function groupSkillsByEvidenceId(rows: EvidenceSkillRow[]): Record<string, EvidenceSkillRow[]> {
@@ -37,10 +48,15 @@ type ToastState = { message: string; type: "success" | "error" } | null;
 type TabKey = "quick" | "academic" | "certs" | "projects" | "awards" | "activities" | "scores";
 
 function calcCompletion(data: PageData): number {
+  const effectiveGpa = resolveGpa({
+    activeVersion: data.activeVersion,
+    records: data.academic,
+    profileGpa: data.profile?.gpa,
+  });
   const checks = [
     Boolean(data.profile?.grade),
     Boolean(data.profile?.university),
-    Boolean(data.profile?.gpa),
+    Boolean(effectiveGpa),
     Boolean(data.profile?.target_company),
     data.evidence.some((r) => r.type === "certificate" && !r.skills.includes("어학")),
     data.academic.length > 0,
@@ -95,6 +111,9 @@ export default function ProfilePage() {
     academic: [],
     evidence: [],
     skillsByEvidenceId: {},
+    activeVersion: null,
+    semesterSummaries: [],
+    pendingReviewVersion: null,
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -105,7 +124,12 @@ export default function ProfilePage() {
   const loadData = useCallback(async () => {
     const [profilePayload, academicPayload, evidencePayload] = await Promise.all([
       getJson<{ data?: CareerProfileRecord | null }>("/api/career-profile"),
-      getJson<{ data?: AcademicRecord[] }>("/api/academic-records"),
+      getJson<{
+        data?: AcademicRecord[];
+        activeVersion?: TranscriptVersion | null;
+        semesterSummaries?: SemesterSummaryRecord[];
+        pendingReviewVersion?: TranscriptVersion | null;
+      }>("/api/academic-records"),
       getJson<{ data?: EvidenceRecord[]; skills?: EvidenceSkillRow[] }>("/api/evidence-records"),
     ]);
     setData({
@@ -113,6 +137,9 @@ export default function ProfilePage() {
       academic: academicPayload.data ?? [],
       evidence: evidencePayload.data ?? [],
       skillsByEvidenceId: groupSkillsByEvidenceId(evidencePayload.skills ?? []),
+      activeVersion: academicPayload.activeVersion ?? null,
+      semesterSummaries: academicPayload.semesterSummaries ?? [],
+      pendingReviewVersion: academicPayload.pendingReviewVersion ?? null,
     });
   }, []);
 
@@ -161,6 +188,11 @@ export default function ProfilePage() {
       return;
     }
 
+    if (!data.activeVersion && data.pendingReviewVersion) {
+      showToast("검토 중인 성적표가 있습니다. 적용 후 분석해주세요.", "error");
+      return;
+    }
+
     setIsAnalyzing(true);
     try {
       const response = await fetch("/api/analyze-career", { method: "POST" });
@@ -205,6 +237,11 @@ export default function ProfilePage() {
     (r) => r.type === "internship" || r.type === "activity" || r.type === "study",
   );
   const pct = calcCompletion(data);
+  const effectiveGpa = resolveGpa({
+    activeVersion: data.activeVersion,
+    records: data.academic,
+    profileGpa: data.profile?.gpa,
+  });
   const analysisRequirements = [
     {
       label: "기본 정보",
@@ -373,20 +410,26 @@ export default function ProfilePage() {
             <>
               <BasicInfoSection
                 profile={data.profile}
+                effectiveGpa={effectiveGpa}
                 onRefresh={onRefresh}
                 onToast={showToast}
               />
               <QuickAnalysisSection
                 profile={data.profile}
-                academicRecords={data.academic}
+                effectiveGpa={effectiveGpa}
+                activeVersion={data.activeVersion}
+                pendingReviewVersion={data.pendingReviewVersion}
                 onRefresh={onRefresh}
                 onToast={showToast}
+                onViewDetail={() => setActiveTab("academic")}
               />
             </>
           )}
           {activeTab === "academic" && (
             <SubjectSection
               records={data.academic}
+              activeVersion={data.activeVersion}
+              semesterSummaries={data.semesterSummaries}
               onRefresh={onRefresh}
               onToast={showToast}
             />

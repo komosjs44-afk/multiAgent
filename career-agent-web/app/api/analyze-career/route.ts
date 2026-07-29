@@ -6,12 +6,15 @@ import { fetchJobPostings } from "@/lib/jobPostings";
 import {
   createClient,
   getAcademicRecords,
+  getActiveTranscriptVersion,
   getEvidenceRecords,
   getEvidenceSkills,
   getJobDescriptions,
+  getPendingReviewVersion,
   getProfile,
   saveAnalysisHistory,
 } from "@/lib/supabase/server";
+import { resolveGpa, resolveTotalCredits } from "@/lib/academicSummary";
 import { buildUserProfile } from "@/lib/userProfileBuilder";
 import type {
   AcademicRecord,
@@ -116,9 +119,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Login required." }, { status: 401 });
     }
 
+    const activeVersion = await getActiveTranscriptVersion(user.id);
+
+    if (!activeVersion) {
+      const pendingReviewVersion = await getPendingReviewVersion(user.id);
+      if (pendingReviewVersion) {
+        return NextResponse.json(
+          { error: "검토 중인 성적표가 있습니다. 적용 후 분석해주세요." },
+          { status: 400 },
+        );
+      }
+    }
+
     const [profileRows, academicRows, evidenceRows, evidenceSkillRows] = await Promise.all([
       getProfile(user.id),
-      getAcademicRecords(user.id),
+      getAcademicRecords(user.id, activeVersion?.id ?? null),
       getEvidenceRecords(user.id),
       getEvidenceSkills(user.id),
     ]);
@@ -134,9 +149,16 @@ export async function POST(request: Request) {
       );
     }
 
+    const academicRecords = Array.isArray(academicRows) ? (academicRows as AcademicRecord[]) : [];
+    const effectiveGpa = resolveGpa({ activeVersion, records: academicRecords, profileGpa: profile.gpa });
+    const effectiveTotalCredits = resolveTotalCredits({ activeVersion, records: academicRecords });
+    // buildUserProfile은 profile.gpa를 그대로 읽으므로, active 버전의 공식 GPA를 우선 반영하려면
+    // 여기서 profile 스냅샷의 gpa만 유효 GPA로 덮어써서 넘깁니다(DB의 profiles.gpa 자체는 건드리지 않음).
+    const profileForAnalysis: CareerProfileRecord = { ...profile, gpa: effectiveGpa };
+
     const inputSnapshot = buildUserProfile({
-      profile,
-      academic: Array.isArray(academicRows) ? (academicRows as AcademicRecord[]) : [],
+      profile: profileForAnalysis,
+      academic: academicRecords,
       evidence: Array.isArray(evidenceRows) ? (evidenceRows as EvidenceRecord[]) : [],
       confirmedSkillRows: Array.isArray(evidenceSkillRows)
         ? (evidenceSkillRows as EvidenceSkillRow[])
@@ -192,6 +214,13 @@ export async function POST(request: Request) {
         user_id: user.id,
         input_profile: inputSnapshot,
         analysis_result: resultSnapshot,
+        transcript_version_id: activeVersion?.id ?? null,
+        cumulative_gpa: effectiveGpa,
+        total_credits: effectiveTotalCredits,
+        target_organizations: (profile.target_company ?? "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
       });
     }
 

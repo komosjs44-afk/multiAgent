@@ -1,13 +1,14 @@
-export async function postJson(path: string, body: Record<string, unknown>): Promise<void> {
+export async function postJson<T = void>(path: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  const payload = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!res.ok) {
-    const payload = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error ?? `${path} 요청 실패`);
   }
+  return payload as T;
 }
 
 export async function patchJson(path: string, body: Record<string, unknown>): Promise<void> {

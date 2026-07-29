@@ -34,6 +34,58 @@ export type AcademicRecord = {
   semester: string;
   skill_mapping: string[];
   created_at: string;
+  transcript_version_id?: string | null;
+  course_code?: string | null;
+  category?: string | null;
+  grade_point?: number | null;
+  is_pass_fail?: boolean;
+  extraction_confidence?: number | null;
+  requires_review?: boolean;
+  source?: "pdf" | "manual";
+};
+
+export type TranscriptVersionStatus = "parsing" | "review" | "active" | "archived" | "failed";
+
+export type TranscriptVersion = {
+  id: string;
+  user_id: string;
+  file_name: string;
+  uploaded_at: string;
+  academic_term: string;
+  total_credits: number | null;
+  cumulative_gpa: number | null;
+  gpa_scale: number;
+  percentile: number | null;
+  total_course_count: number;
+  status: TranscriptVersionStatus;
+  is_active: boolean;
+  parser_version: string | null;
+  source_type: "pdf" | "manual";
+  created_at: string;
+  updated_at: string;
+};
+
+export type SemesterSummaryRecord = {
+  id: string;
+  user_id: string;
+  transcript_version_id: string;
+  semester: string;
+  earned_credits: number | null;
+  gpa_credits: number | null;
+  semester_gpa: number | null;
+  percentile: number | null;
+  course_count: number;
+  created_at: string;
+};
+
+export type TranscriptDiff = {
+  addedCount: number;
+  changedCount: number;
+  removedCount: number;
+  previousGpa: number | null;
+  newGpa: number | null;
+  previousCredits: number | null;
+  newCredits: number | null;
 };
 
 export type EvidenceRecordType =
@@ -340,6 +392,7 @@ export type ExtractedEvidence = {
     grade?: string;
     semester?: string;
     skillMapping: string[];
+    needsReview?: boolean;
   }>;
   grade?: string;
   rawText?: string;
@@ -353,8 +406,24 @@ export type ExtractedEvidence = {
     detectedCourseCodeCount: number;
     detectedSemesterCount: number;
     parsedCourseCount: number;
+    needsReviewCount?: number;
     warnings: string[];
   };
+  /** PDF에서 읽거나 계산해 낸 학업 요약. 값이 없으면 표시하지 않습니다. */
+  summary?: {
+    totalCredits: number | null;
+    overallGpa: number | null;
+    percentile: number | null;
+    courseCount: number;
+    confidencePercent: number;
+  };
+  /** PDF에서 읽은 학기별 "이수학점 X 평점평균 Y(Z)" 요약. 성적표 버전 저장 시 학기별 요약에 우선 사용됩니다. */
+  semesterSummaries?: Array<{
+    semester: string;
+    credits: number | null;
+    gpa: number | null;
+    percentile: number | null;
+  }>;
   warning?: string;
 };
 

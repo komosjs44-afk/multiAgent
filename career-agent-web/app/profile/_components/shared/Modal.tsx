@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 type Props = {
   isOpen: boolean;
@@ -12,6 +12,8 @@ type Props = {
 };
 
 export default function Modal({ isOpen, onClose, title, children, footer, size = "default" }: Props) {
+  const titleId = useId();
+
   if (!isOpen) return null;
 
   const widthClass = size === "wide" ? "sm:max-w-[60rem]" : "sm:max-w-lg";
@@ -27,9 +29,12 @@ export default function Modal({ isOpen, onClose, title, children, footer, size =
       <div
         className={`grid max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] gap-5 overflow-hidden rounded-t-[2rem] bg-white p-6 shadow-2xl sm:rounded-[2rem] ${widthClass} ${rowClass}`}
         onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
       >
         <div className="flex min-w-0 items-center justify-between gap-4">
-          <h3 className="text-lg font-extrabold text-[var(--ink)]">{title}</h3>
+          <h3 id={titleId} className="text-lg font-extrabold text-[var(--ink)]">{title}</h3>
           <button
             type="button"
             onClick={onClose}
