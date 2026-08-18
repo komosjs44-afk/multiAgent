@@ -388,14 +388,32 @@ export type ExtractedEvidence = {
     courseName: string;
     courseCode?: string;
     category?: string;
+    categoryRaw?: string;
+    categoryNormalized?: string;
     credit?: number | null;
+    originalCredit?: string;
+    isBracketedCredit?: boolean;
     grade?: string;
     semester?: string;
+    originalSemester?: string;
     skillMapping: string[];
+    confidence?: number;
     needsReview?: boolean;
+    reviewReasons?: string[];
+    normalizationChanges?: Array<{
+      field: string;
+      original: string;
+      normalized: string;
+      reason: string;
+    }>;
+    sourcePage?: number;
+    sourceLine?: number;
+    sourceText?: string;
   }>;
   grade?: string;
-  rawText?: string;
+  extractionMethod?: "pdf-text" | "ocr";
+  originalText?: string;
+  normalizedText?: string;
   pages?: Array<{
     page: number;
     text: string;
@@ -408,6 +426,20 @@ export type ExtractedEvidence = {
     parsedCourseCount: number;
     needsReviewCount?: number;
     warnings: string[];
+    mismatches?: Array<{
+      code: "TOTAL_CREDIT_MISMATCH" | "SEMESTER_CREDIT_MISMATCH";
+      semester?: string;
+      declared: number;
+      calculated: number;
+      difference: number;
+    }>;
+    unmatchedRows?: string[];
+    normalizationChanges?: Array<{
+      field: string;
+      original: string;
+      normalized: string;
+      reason: string;
+    }>;
   };
   /** PDF에서 읽거나 계산해 낸 학업 요약. 값이 없으면 표시하지 않습니다. */
   summary?: {
@@ -416,6 +448,12 @@ export type ExtractedEvidence = {
     percentile: number | null;
     courseCount: number;
     confidencePercent: number;
+    declaredTotalCredits?: number | null;
+    calculatedTotalCredits?: number | null;
+    declaredGpa?: number | null;
+    calculatedGpa?: number | null;
+    gpaScale?: number;
+    categoryCredits?: Readonly<Record<string, number>>;
   };
   /** PDF에서 읽은 학기별 "이수학점 X 평점평균 Y(Z)" 요약. 성적표 버전 저장 시 학기별 요약에 우선 사용됩니다. */
   semesterSummaries?: Array<{
@@ -423,6 +461,7 @@ export type ExtractedEvidence = {
     credits: number | null;
     gpa: number | null;
     percentile: number | null;
+    calculatedCredits?: number | null;
   }>;
   warning?: string;
 };

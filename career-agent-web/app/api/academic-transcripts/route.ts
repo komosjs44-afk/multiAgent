@@ -3,14 +3,25 @@ import { NextResponse } from "next/server";
 import {
   createClient,
   createTranscriptVersion,
+  deleteTranscriptReviewBundle,
   getAcademicRecordsByVersion,
   getActiveTranscriptVersion,
   insertSemesterSummaries,
   insertTranscriptCourses,
 } from "@/lib/supabase/server";
 import { computeCourseAggregate, gradeToPoint, isPassFailGrade } from "@/lib/academicSummary";
+import {
+  persistTranscriptBundle,
+  resolveConfirmedTranscriptGpa,
+} from "@/lib/transcriptSaveContract";
 import { isMissingSchemaError } from "@/lib/supabase/errors";
-import { PARSER_VERSION, compareSemesters } from "@/lib/transcriptParser";
+import { PARSER_VERSION, resolveAcademicTerm } from "@/lib/transcriptParser";
+import {
+  ALLOWED_CREDITS,
+  ALLOWED_GRADES,
+  COURSE_CODE_PATTERN,
+  SEMESTER_KEY_PATTERN,
+} from "@/lib/transcriptRules";
 import type { AcademicRecord, TranscriptDiff } from "@/types/career";
 
 // "과목 정보" 같은 placeholder나 빈 과목명은 최종 저장 단계에서도 한 번 더 걸러냅니다
@@ -72,6 +83,25 @@ function dedupeCourses(courses: ReturnType<typeof normalizeCourse>[]) {
     seen.add(key);
     return true;
   });
+}
+
+function getCourseValidationError(course: ReturnType<typeof normalizeCourse>) {
+  if (!SEMESTER_KEY_PATTERN.test(course.semester)) return `${course.courseName}: 학기 형식은 YYYY-1 또는 YYYY-2여야 합니다.`;
+  if (!COURSE_CODE_PATTERN.test(course.courseCode)) return `${course.courseName}: 과목코드 형식을 확인해주세요.`;
+  if (course.credit == null || !ALLOWED_CREDITS.has(course.credit)) return `${course.courseName}: 허용되지 않은 학점입니다.`;
+  if (!ALLOWED_GRADES.has(course.grade)) return `${course.courseName}: 허용되지 않은 성적 코드입니다.`;
+  if (course.needsReview) return `${course.courseName}: 검토 완료되지 않은 과목입니다.`;
+  return null;
+}
+
+function findDuplicateCourse(courses: readonly ReturnType<typeof normalizeCourse>[]) {
+  const seen = new Set<string>();
+  for (const course of courses) {
+    const key = `${course.semester}:${course.courseCode || course.courseName.toLowerCase()}`;
+    if (seen.has(key)) return course;
+    seen.add(key);
+  }
+  return null;
 }
 
 function courseMatchKey(courseCode: string | null | undefined, courseName: string, semester: string) {
@@ -152,14 +182,33 @@ export async function POST(request: Request) {
         overallGpa?: unknown;
         percentile?: unknown;
         confidencePercent?: unknown;
+        declaredGpa?: unknown;
+        calculatedGpa?: unknown;
+        gpaScale?: unknown;
       } | null;
       semesterSummaries?: IncomingSemesterSummary[];
+      declaredGpa?: unknown;
+      calculatedGpa?: unknown;
+      confirmedGpa?: unknown;
+      gpaScale?: unknown;
     };
 
-    const courses = dedupeCourses((body.courses ?? []).map(normalizeCourse));
+    const normalizedCourses = (body.courses ?? []).map(normalizeCourse);
+    const duplicateCourse = findDuplicateCourse(normalizedCourses);
+    if (duplicateCourse) {
+      return NextResponse.json(
+        { error: `${duplicateCourse.courseName}: 동일 학기 중복 과목을 정리해주세요.` },
+        { status: 400 },
+      );
+    }
+    const courses = dedupeCourses(normalizedCourses);
 
     if (!courses.length) {
       return NextResponse.json({ error: "저장할 과목이 없습니다." }, { status: 400 });
+    }
+    const courseValidationError = courses.map(getCourseValidationError).find(Boolean);
+    if (courseValidationError) {
+      return NextResponse.json({ error: courseValidationError }, { status: 400 });
     }
 
     const officialSemesterSummaries = new Map(
@@ -180,52 +229,33 @@ export async function POST(request: Request) {
     const summaryTotalCredits = getNumberOrNull(body.summary?.totalCredits);
     const summaryOverallGpa = getNumberOrNull(body.summary?.overallGpa);
     const totalCredits = summaryTotalCredits ?? (aggregate.totalCredits > 0 ? aggregate.totalCredits : null);
-    const cumulativeGpa = summaryOverallGpa ?? aggregate.averageGpa;
+    const cumulativeGpa = resolveConfirmedTranscriptGpa({
+      confirmedGpa: getNumberOrNull(body.confirmedGpa),
+      declaredGpa: getNumberOrNull(body.declaredGpa ?? body.summary?.declaredGpa),
+      summaryOverallGpa,
+      calculatedGpa: getNumberOrNull(body.calculatedGpa ?? body.summary?.calculatedGpa),
+      aggregateGpa: aggregate.averageGpa,
+    });
+    const gpaScale = getNumberOrNull(body.gpaScale ?? body.summary?.gpaScale) ?? 4.5;
+    if (cumulativeGpa == null || cumulativeGpa < 0 || cumulativeGpa > gpaScale) {
+      return NextResponse.json({ error: "최종 확인 GPA가 평점 만점 범위를 벗어났습니다." }, { status: 400 });
+    }
+    if (gpaScale <= 0 || gpaScale > 5) {
+      return NextResponse.json({ error: "평점 만점은 0보다 크고 5 이하여야 합니다." }, { status: 400 });
+    }
     const percentile = getNumberOrNull(body.summary?.percentile);
     const confidencePercent = getNumberOrNull(body.summary?.confidencePercent);
 
     const academicTerm =
-      getString(body.academicTerm) ||
-      courses.reduce((latest, course) => {
-        if (!latest) return course.semester;
-        return compareSemesters(course.semester, latest) > 0 ? course.semester : latest;
-      }, "");
+      resolveAcademicTerm(
+        getString(body.academicTerm),
+        courses.map((course) => course.semester),
+      ) ?? "";
 
     const activeVersion = await getActiveTranscriptVersion(user.id);
     const previousCourses = activeVersion
       ? await getAcademicRecordsByVersion(user.id, activeVersion.id)
       : [];
-
-    const version = await createTranscriptVersion({
-      user_id: user.id,
-      file_name: getString(body.fileName),
-      academic_term: academicTerm,
-      total_credits: totalCredits,
-      cumulative_gpa: cumulativeGpa,
-      percentile,
-      total_course_count: courses.length,
-      parser_version: PARSER_VERSION,
-      source_type: "pdf",
-    });
-
-    await insertTranscriptCourses(
-      courses.map((course) => ({
-        user_id: user.id,
-        course_name: course.courseName,
-        credit: course.credit,
-        grade: course.grade,
-        semester: course.semester,
-        skill_mapping: [course.category, course.courseCode, course.courseName].filter(Boolean),
-        transcript_version_id: version.id,
-        course_code: course.courseCode || null,
-        category: course.category || null,
-        grade_point: gradeToPoint(course.grade),
-        is_pass_fail: isPassFailGrade(course.grade),
-        extraction_confidence: confidencePercent,
-        requires_review: course.needsReview,
-        source: "pdf" as const,
-      })),
-    );
 
     const semesterGroups = new Map<string, ReturnType<typeof normalizeCourse>[]>();
     for (const course of courses) {
@@ -234,24 +264,61 @@ export async function POST(request: Request) {
       semesterGroups.set(course.semester, list);
     }
 
-    await insertSemesterSummaries(
-      Array.from(semesterGroups.entries()).map(([semester, semesterCourses]) => {
-        const official = officialSemesterSummaries.get(semester);
-        const computed = computeCourseAggregate(
-          semesterCourses.map((course) => ({ credit: course.credit, grade: course.grade })),
-        );
-        return {
+    const version = await persistTranscriptBundle({
+      createVersion: () =>
+        createTranscriptVersion({
           user_id: user.id,
-          transcript_version_id: version.id,
-          semester,
-          earned_credits: official?.credits ?? (computed.totalCredits > 0 ? computed.totalCredits : null),
-          gpa_credits: computed.gpaCredits > 0 ? computed.gpaCredits : null,
-          semester_gpa: official?.gpa ?? computed.averageGpa,
-          percentile: official?.percentile ?? null,
-          course_count: semesterCourses.length,
-        };
-      }),
-    );
+          file_name: getString(body.fileName),
+          academic_term: academicTerm,
+          total_credits: totalCredits,
+          cumulative_gpa: cumulativeGpa,
+          gpa_scale: gpaScale,
+          percentile,
+          total_course_count: courses.length,
+          parser_version: PARSER_VERSION,
+          source_type: "pdf",
+        }),
+      insertCourses: (createdVersion) =>
+        insertTranscriptCourses(
+          courses.map((course) => ({
+            user_id: user.id,
+            course_name: course.courseName,
+            credit: course.credit,
+            grade: course.grade,
+            semester: course.semester,
+            skill_mapping: [course.category, course.courseCode, course.courseName].filter(Boolean),
+            transcript_version_id: createdVersion.id,
+            course_code: course.courseCode || null,
+            category: course.category || null,
+            grade_point: gradeToPoint(course.grade),
+            is_pass_fail: isPassFailGrade(course.grade),
+            extraction_confidence: confidencePercent,
+            requires_review: course.needsReview,
+            source: "pdf" as const,
+          })),
+        ),
+      insertSemesterSummaries: (createdVersion) =>
+        insertSemesterSummaries(
+          Array.from(semesterGroups.entries()).map(([semester, semesterCourses]) => {
+            const official = officialSemesterSummaries.get(semester);
+            const computed = computeCourseAggregate(
+              semesterCourses.map((course) => ({ credit: course.credit, grade: course.grade })),
+            );
+            return {
+              user_id: user.id,
+              transcript_version_id: createdVersion.id,
+              semester,
+              earned_credits: official?.credits ?? (computed.totalCredits > 0 ? computed.totalCredits : null),
+              gpa_credits: computed.gpaCredits > 0 ? computed.gpaCredits : null,
+              semester_gpa: official?.gpa ?? computed.averageGpa,
+              percentile: official?.percentile ?? null,
+              course_count: semesterCourses.length,
+            };
+          }),
+        ),
+      cleanup: (createdVersion) =>
+        deleteTranscriptReviewBundle(user.id, createdVersion.id),
+    });
 
     const diff = buildDiff({
       previousVersion: activeVersion,

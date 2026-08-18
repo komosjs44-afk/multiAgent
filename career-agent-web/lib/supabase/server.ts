@@ -213,6 +213,7 @@ type TranscriptVersionInput = {
   academic_term: string;
   total_credits: number | null;
   cumulative_gpa: number | null;
+  gpa_scale: number;
   percentile: number | null;
   total_course_count: number;
   parser_version: string | null;
@@ -553,6 +554,24 @@ export async function insertSemesterSummaries(rows: SemesterSummaryInput[]) {
   return data;
 }
 
+export async function deleteTranscriptReviewBundle(userId: string, versionId: string) {
+  const supabase = await createClient();
+  const { error: courseError } = await supabase
+    .from("academic_records")
+    .delete()
+    .eq("user_id", userId)
+    .eq("transcript_version_id", versionId);
+  if (courseError) throw courseError;
+
+  const { error: versionError } = await supabase
+    .from("academic_transcript_versions")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", versionId)
+    .eq("is_active", false);
+  if (versionError) throw versionError;
+}
+
 /**
  * 대상 버전을 active로 바꾸기 전에, 이 사용자의 기존 active 버전을 archived로 내립니다.
  * (academic_transcript_versions_one_active_idx 부분 유니크 인덱스 때문에 순서가 중요합니다 —
@@ -571,6 +590,13 @@ export async function activateTranscriptVersion(userId: string, versionId: strin
   if (targetError) throw targetError;
   if (!target) throw new Error("성적표 버전을 찾을 수 없습니다.");
 
+  const { data: previousActive, error: previousError } = await supabase
+    .from("academic_transcript_versions")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("is_active", true);
+  if (previousError) throw previousError;
+
   const { error: archiveError } = await supabase
     .from("academic_transcript_versions")
     .update({ status: "archived", is_active: false, updated_at: now })
@@ -586,7 +612,23 @@ export async function activateTranscriptVersion(userId: string, versionId: strin
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    const previousIds = (previousActive ?? []).map((item) => item.id);
+    if (previousIds.length) {
+      const { error: restoreError } = await supabase
+        .from("academic_transcript_versions")
+        .update({ status: "active", is_active: true, updated_at: new Date().toISOString() })
+        .eq("user_id", userId)
+        .in("id", previousIds);
+      if (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          "새 성적표 적용과 이전 활성 버전 복구에 모두 실패했습니다.",
+        );
+      }
+    }
+    throw error;
+  }
   return data;
 }
 

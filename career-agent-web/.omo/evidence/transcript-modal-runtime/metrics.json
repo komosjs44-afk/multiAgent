@@ -1,0 +1,46 @@
+[
+  {
+    "viewport_width": 375,
+    "viewport_height": 812,
+    "modal_width": 343,
+    "page_has_horizontal_overflow": false,
+    "modal_has_horizontal_overflow": false,
+    "body_has_horizontal_overflow": false,
+    "all_inputs_inside_modal": true,
+    "save_button_visible_inside_modal": true,
+    "modal_has_dialog_role": true
+  },
+  {
+    "viewport_width": 768,
+    "viewport_height": 900,
+    "modal_width": 736,
+    "page_has_horizontal_overflow": false,
+    "modal_has_horizontal_overflow": false,
+    "body_has_horizontal_overflow": false,
+    "all_inputs_inside_modal": true,
+    "save_button_visible_inside_modal": true,
+    "modal_has_dialog_role": true
+  },
+  {
+    "viewport_width": 1108,
+    "viewport_height": 1000,
+    "modal_width": 960,
+    "page_has_horizontal_overflow": false,
+    "modal_has_horizontal_overflow": false,
+    "body_has_horizontal_overflow": false,
+    "all_inputs_inside_modal": true,
+    "save_button_visible_inside_modal": true,
+    "modal_has_dialog_role": true
+  },
+  {
+    "viewport_width": 1280,
+    "viewport_height": 900,
+    "modal_width": 960,
+    "page_has_horizontal_overflow": false,
+    "modal_has_horizontal_overflow": false,
+    "body_has_horizontal_overflow": false,
+    "all_inputs_inside_modal": true,
+    "save_button_visible_inside_modal": true,
+    "modal_has_dialog_role": true
+  }
+]

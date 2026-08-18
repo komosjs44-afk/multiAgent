@@ -1,0 +1,35 @@
+[
+  {
+    "viewport": 375,
+    "screenshot": "D:\\project\\multi-agent\\career-agent-web\\.omo\\evidence\\transcript-modal-qa\\transcript-modal-375.png",
+    "page_has_horizontal_overflow": false,
+    "modal_has_horizontal_overflow": false,
+    "body_has_horizontal_overflow": false,
+    "body_has_vertical_scroll": true,
+    "all_inputs_inside_modal": true,
+    "save_button_visible_inside_modal": true,
+    "responsive_grid_matches": true
+  },
+  {
+    "viewport": 768,
+    "screenshot": "D:\\project\\multi-agent\\career-agent-web\\.omo\\evidence\\transcript-modal-qa\\transcript-modal-768.png",
+    "page_has_horizontal_overflow": false,
+    "modal_has_horizontal_overflow": false,
+    "body_has_horizontal_overflow": false,
+    "body_has_vertical_scroll": true,
+    "all_inputs_inside_modal": true,
+    "save_button_visible_inside_modal": true,
+    "responsive_grid_matches": true
+  },
+  {
+    "viewport": 1280,
+    "screenshot": "D:\\project\\multi-agent\\career-agent-web\\.omo\\evidence\\transcript-modal-qa\\transcript-modal-1280.png",
+    "page_has_horizontal_overflow": false,
+    "modal_has_horizontal_overflow": false,
+    "body_has_horizontal_overflow": false,
+    "body_has_vertical_scroll": true,
+    "all_inputs_inside_modal": true,
+    "save_button_visible_inside_modal": true,
+    "responsive_grid_matches": true
+  }
+]

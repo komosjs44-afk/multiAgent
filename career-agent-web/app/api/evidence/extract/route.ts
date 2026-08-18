@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
-import { PDFParse } from "pdf-parse";
 
 import {
-  buildTranscriptSummary,
-  extractSemesterSummaries,
-  getTranscriptDiagnostics,
-  parseTranscriptText,
+  normalizeTranscriptPageText,
+  parseTranscriptPages,
 } from "@/lib/transcriptParser";
+import { resolveInitialTranscriptGpa } from "@/lib/transcriptSaveContract";
+import {
+  extractTranscriptText,
+  OcrFallbackUnavailableError,
+  PdfTextLayerExtractor,
+  type TranscriptTextExtraction,
+} from "@/lib/transcriptExtraction";
 import type { EvidenceDocumentType, ExtractedEvidence } from "@/types/career";
 
 export const runtime = "nodejs";
@@ -52,23 +56,6 @@ function normalizeText(text: string) {
 
 function unique(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
-}
-
-async function extractPdfText(file: File) {
-  const buffer = Buffer.from(await file.arrayBuffer());
-
-  // 이전에는 PDFParse.setWorker()로 로컬 node_modules 경로를 직접 가리켰습니다. Node.js에서는
-  // getText()가 워커 설정 없이도 동작하고(직접 재현 확인), Vercel 서버리스 배포에서는 이 경로가
-  // 번들에 포함되지 않아 "Setting up fake worker failed: Cannot find module ..."로 추출 자체가
-  // 실패하는 원인이었습니다. 그래서 이 설정을 제거합니다.
-  const parser = new PDFParse({ data: buffer });
-
-  try {
-    const result = await parser.getText();
-    return normalizeText(result.text ?? "");
-  } finally {
-    await parser.destroy();
-  }
 }
 
 function extractGpa(text: string) {
@@ -126,28 +113,31 @@ function extractProjects(text: string, fileName: string, docType: EvidenceDocume
 function buildExtraction({
   fileName,
   docType,
-  text,
+  extraction,
 }: {
   fileName: string;
   docType: EvidenceDocumentType;
-  text: string;
+  extraction: TranscriptTextExtraction;
 }): ExtractedEvidence {
-  const parsedCourses = docType === "transcript" ? parseTranscriptText(text) : [];
-  const diagnostics =
+  const normalizedPages = extraction.pages.map((page) => ({
+    page: page.page,
+    text: normalizeTranscriptPageText(page.text).text,
+  }));
+  const normalizedText =
     docType === "transcript"
-      ? getTranscriptDiagnostics(text, parsedCourses)
-      : undefined;
-  const summary =
-    docType === "transcript" && diagnostics
-      ? buildTranscriptSummary(text, parsedCourses, diagnostics)
-      : undefined;
-  const semesterSummaries =
-    docType === "transcript" ? extractSemesterSummaries(text) : undefined;
+      ? normalizedPages.map((page) => page.text).join("\n\f\n")
+      : normalizeText(extraction.originalText);
+  const structuredResult =
+    docType === "transcript" ? parseTranscriptPages(extraction.pages) : undefined;
+  const parsedCourses = structuredResult?.courses ?? [];
+  const diagnostics = structuredResult?.diagnostics;
+  const summary = structuredResult?.summary;
+  const semesterSummaries = structuredResult?.semesterSummaries;
 
   if (docType === "transcript") {
     // 개인정보(원문·과목명)는 남기지 않고, 진단에 필요한 개수/길이만 기록합니다.
     console.log("[evidence/extract] transcript parsed", {
-      rawTextLength: text.length,
+      rawTextLength: extraction.originalText.length,
       detectedSemesterCount: diagnostics?.detectedSemesterCount,
       detectedCourseCodeCount: diagnostics?.detectedCourseCodeCount,
       parsedCourseCount: diagnostics?.parsedCourseCount,
@@ -159,15 +149,26 @@ function buildExtraction({
   const courses = parsedCourses.map((course) => ({
     semester: course.semester,
     category: course.category,
+    categoryRaw: course.categoryRaw,
+    categoryNormalized: course.categoryNormalized,
     courseCode: course.courseCode,
     courseName: course.courseName,
     credit: course.credit,
     grade: course.grade,
     skillMapping: inferSkillMapping(course.courseName),
+    originalCredit: course.originalCredit,
+    isBracketedCredit: course.isBracketedCredit,
+    originalSemester: course.originalSemester,
+    confidence: course.confidence,
     needsReview: course.needsReview,
+    reviewReasons: [...course.reviewReasons],
+    normalizationChanges: [...course.normalizationChanges],
+    sourcePage: course.sourcePage,
+    sourceLine: course.sourceLine,
+    sourceText: course.sourceText,
   }));
-  const certificates = extractCertificates(text);
-  const projects = extractProjects(text, fileName, docType);
+  const certificates = extractCertificates(normalizedText);
+  const projects = extractProjects(normalizedText, fileName, docType);
   const skills = unique([
     ...courses.flatMap((course) => course.skillMapping),
     ...projects.map(() => "프로젝트"),
@@ -175,7 +176,16 @@ function buildExtraction({
   ]);
   const warning = diagnostics?.warnings[0];
   // PDF에 총계 문구가 명시돼 있으면 그 값을 우선 쓰고, 없으면 학기별 요약을 학점 가중평균해 계산합니다.
-  const gpa = docType === "transcript" ? extractGpa(text) ?? summary?.overallGpa?.toFixed(2) : undefined;
+  const extractedGpa = extractGpa(normalizedText);
+  const initialGpa =
+    docType === "transcript"
+      ? resolveInitialTranscriptGpa({
+          declaredGpa: summary?.declaredGpa ?? null,
+          summaryOverallGpa: summary?.overallGpa ?? null,
+          extractedGpa: extractedGpa == null ? null : Number(extractedGpa),
+        })
+      : null;
+  const gpa = initialGpa?.toFixed(2);
 
   return {
     documentType: docType,
@@ -187,12 +197,22 @@ function buildExtraction({
     projects,
     courses,
     grade: gpa,
-    rawText: text.slice(0, 4000),
-    pages: [{ page: 1, text: text.slice(0, 4000) }],
-    pageCount: text ? 1 : 0,
-    diagnostics,
+    extractionMethod: extraction.method,
+    originalText: extraction.originalText,
+    normalizedText,
+    pages: extraction.pages.map((page) => ({ page: page.page, text: page.text })),
+    pageCount: extraction.pages.length,
+    diagnostics: diagnostics
+      ? {
+          ...diagnostics,
+          warnings: [...diagnostics.warnings],
+          mismatches: [...diagnostics.mismatches],
+          unmatchedRows: [...diagnostics.unmatchedRows],
+          normalizationChanges: [...diagnostics.normalizationChanges],
+        }
+      : undefined,
     summary,
-    semesterSummaries,
+    semesterSummaries: semesterSummaries?.map((item) => ({ ...item })),
     warning,
   };
 }
@@ -221,9 +241,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const text = await extractPdfText(file);
-    return NextResponse.json(buildExtraction({ fileName: file.name, docType, text }));
+    const pdfExtractor = new PdfTextLayerExtractor();
+    const extraction =
+      docType === "transcript"
+        ? await extractTranscriptText(file, pdfExtractor)
+        : await pdfExtractor.extract(file);
+    return NextResponse.json(buildExtraction({ fileName: file.name, docType, extraction }));
   } catch (error) {
+    if (error instanceof OcrFallbackUnavailableError) {
+      return NextResponse.json(
+        { error: error.message, reasons: error.reasons },
+        { status: 422 },
+      );
+    }
     // 원인 파악이 가능하도록 서버 로그에 남깁니다(에러 메시지/스택만, 문서 내용은 포함하지 않음).
     console.error("[evidence/extract] failed", error);
     const message =

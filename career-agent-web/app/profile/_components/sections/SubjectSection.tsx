@@ -12,7 +12,11 @@ import {
   getCourseCode,
   type CleanupPreview,
 } from "@/lib/academicSummary";
-import { CORE_MAJOR_SUBJECTS, compareSemesters } from "@/lib/transcriptParser";
+import {
+  CORE_MAJOR_SUBJECTS,
+  compareSemesters,
+  resolveAcademicTerm,
+} from "@/lib/transcriptParser";
 import type { AcademicRecord, SemesterSummaryRecord, TranscriptVersion } from "@/types/career";
 
 const CORE_SUBJECTS = CORE_MAJOR_SUBJECTS;
@@ -92,7 +96,7 @@ function formFromRecord(record: AcademicRecord): FormState {
 function formatAcademicTerm(term: string) {
   const match = term.match(/^(\d{4})-(\d)$/);
   if (!match) return term || "반영 학기 미확인";
-  return `${match[1]}년 ${match[2]}학기 반영본`;
+  return `${match[1]}년 ${match[2]}학기`;
 }
 
 function formatDate(value?: string | null) {
@@ -159,6 +163,10 @@ export default function SubjectSection({ records, activeVersion, semesterSummari
   const totalCredits = activeVersion?.total_credits ?? (fallbackSummary.totalCredits || null);
   const averageGpa = activeVersion?.cumulative_gpa ?? fallbackSummary.averageGpa;
   const courseCount = activeVersion?.total_course_count ?? fallbackSummary.courseCount;
+  const activeAcademicTerm = resolveAcademicTerm(
+    activeVersion?.academic_term,
+    visibleRecords.map((record) => record.semester),
+  );
 
   function openAdd(semester = "") {
     setEditTarget(null);
@@ -409,7 +417,7 @@ export default function SubjectSection({ records, activeVersion, semesterSummari
                 <SummaryStat label="총 과목" value={`${courseCount}과목`} />
                 <SummaryStat
                   label="현재 반영본"
-                  value={activeVersion ? formatAcademicTerm(activeVersion.academic_term) : "미적용"}
+                  value={activeVersion ? formatAcademicTerm(activeAcademicTerm ?? "") : "미적용"}
                 />
                 <SummaryStat
                   label="최근 업데이트"

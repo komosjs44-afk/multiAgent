@@ -1,25 +1,11 @@
-import { GRADE_POINTS, gradeToPoint, isPassFailGrade } from "@/lib/transcriptParser";
+import { GRADE_POINTS, gradeToPoint, isPassFailGrade } from "./transcriptParser.ts";
+import { CATEGORIES, COURSE_CODE_PATTERN, isEarnedCreditGrade } from "./transcriptRules.ts";
 import type { AcademicRecord, TranscriptVersion } from "@/types/career";
 
 export { GRADE_POINTS, gradeToPoint, isPassFailGrade };
 
-const COURSE_CODE_LIKE = /^[A-Z]{1,5}\d{2,4}[A-Z0-9]*$/;
-
-const CATEGORY_VALUES = new Set([
-  "교필",
-  "교선",
-  "계공",
-  "전공",
-  "전필",
-  "전선",
-  "일선",
-  "기전",
-  "복수",
-  "부전",
-  "마전",
-  "교양",
-  "전기",
-]);
+const COURSE_CODE_LIKE = COURSE_CODE_PATTERN;
+const CATEGORY_VALUES = new Set<string>(CATEGORIES);
 
 const JUNK_EXACT_NAMES = new Set(["과목 정보", "성적 미입력", "학기 미분류"]);
 
@@ -71,7 +57,7 @@ export function computeCourseAggregate(records: GradeableCourse[]): CourseAggreg
 
   for (const record of records) {
     const credit = record.credit ?? 0;
-    if (credit > 0) {
+    if (credit > 0 && isEarnedCreditGrade(record.grade)) {
       totalCredits += credit;
     }
 
